@@ -183,8 +183,20 @@ async function loadFile() {
 // letter this bar, else the key signature.
 // Returns an array indexed BY SYSTEM, each = array per staff of
 // {name, count} events (chords as one entry with `count` heads).
-function computeEvents(tune) {
-  const out = [];           // out[systemIdx] = [staffIdx][eventIdx]
+function computeEvents(tune, collector) {
+  const out = [];
+  const eventsOut = collector ? collector.order : null;
+  // collector (optional): ordered required events for the piano link.
+  // midis are octave-strict; grace notes are tolerated, never required.
+  const midiOf = (p) => {
+    const oct = Math.floor(p.pitch / 7);
+    const idx = ((p.pitch % 7) + 7) % 7;
+    let midi = 60 + 12 * oct + LETTER_SEMIS[idx];
+    const acc = p.accidental || keyAcc["CDEFGAB"[idx]] || "";
+    if (ACC_SEMIS[acc] !== undefined) midi += ACC_SEMIS[acc];
+    else if (ACC_WORD[acc] !== undefined) midi += ACC_WORD[acc];
+    return midi;
+  };           // out[systemIdx] = [staffIdx][eventIdx]
   let keyAcc = {};
   let barAcc = {};
   function headName(p) {
@@ -212,8 +224,19 @@ function computeEvents(tune) {
       for (const voice of staff.voices) {
         for (const ev of voice) {
           if (ev.el_type === "bar") { barAcc = {}; continue; }
+          if (ev.gracenotes && ev.gracenotes.length) {
+            for (const gi of ev.gracenotes) {
+              if (gi.name || gi.pitch !== undefined) {
+                const gp = { name: gi.name, pitch: gi.pitch, accidental: gi.accidental };
+                outStaff.push({ name: headName(gp), count: 1 });
+                if (collector) collector.tolerated.push(midiOf(gp));
+              }
+            }
+          }
           if (ev.el_type !== "note" || !ev.pitches) continue;
-          outStaff.push({ name: ev.pitches.map(headName).join("\u2009"), count: ev.pitches.length });
+          const label = ev.pitches.map(headName).join("\u2009");
+          outStaff.push({ name: label, count: ev.pitches.length });
+          if (eventsOut) eventsOut.push({ midis: ev.pitches.map(midiOf), label: label, got: [], ticked: false });
         }
       }
     }
@@ -503,7 +526,9 @@ function pfRender() {
         window.__pfVis = vis;
         // follow scoring: required pitch classes of the DISPLAYED voice(s)
         window.__pfFollowOn = !!midiInput;
-        pfFollow = Object.assign(computeRequired(vis), { pending: 0, misses: 0, done: false });
+        const col = { order: [], tolerated: [] };
+        computeEvents(vis[0], col);
+        pfFollow = { order: col.order, tolerated: col.tolerated, i: 0, misses: 0, done: false };
         if (window.__pfFollowOn) window.__pfInfoBase = el("pfinfo").textContent;
         // duet: pre-render the opposite voice for the accompanist
         window.__pfAccVis = null;
@@ -567,9 +592,11 @@ function pfExit() {
 // (window flips when its pitch classes are played), tally (✓ on labels).
 // Feedback is text/tick only by design (achromatopsia — no color coding).
 let midiAccess = null, midiInput = null, midiWanted = false;
-let pfFollow = { events: [], misses: 0, done: false };
+let pfFollow = { order: [], tolerated: [], i: 0, misses: 0, done: false };
 const LETTER_SEMIS = {0: 0, 1: 2, 2: 4, 3: 5, 4: 7, 5: 9, 6: 11};
 const ACC_SEMIS = {"^": 1, "__": -2, "^^": 2, "_": -1, "=": 0};
+const ACC_WORD = { flat: -1, sharp: 1, natural: 0, dble_flat: -2, dble_sharp: 2,
+                   "dble-flat": -2, "dble-sharp": 2, "dbl-flat": -2, "dbl-sharp": 2 };
 function pianoToggle() {
   if (midiInput || midiWanted) {   // disconnect
     midiWanted = false;
@@ -626,7 +653,9 @@ function hookMidiInput(inp) {
   status("");
   if (window.__pfVis && !window.__pfFollowOn) {
     window.__pfFollowOn = true;
-    pfFollow = Object.assign(computeRequired(window.__pfVis), { pending: 0, misses: 0, done: false });
+    const col2 = { order: [], tolerated: [] };
+    computeEvents(window.__pfVis[0], col2);
+    pfFollow = { order: col2.order, tolerated: col2.tolerated, i: 0, misses: 0, done: false };
     window.__pfInfoBase = el("pfinfo").textContent;
   }
 }
@@ -635,199 +664,55 @@ window.__onPianoNote = onPianoNote;
 function onPianoNote(midi, on) {
   if (!on) return;
   if (!el("pf").classList.contains("on")) return;
-  const cls = ((midi % 12) + 12) % 12;
-  if (window.__pfFollowOn) followNote(cls);
+  if (window.__pfFollowOn) followNote(midi);
 }
-function computeRequired(vis) {
-  // accidentals come from FIVE sources, in priority order:
-  //   explicit in the note (p.accidental) > key signature (staff.key) > none
-  // key-sourced accidentals were missing before: a Db in a flat key showed up
-  // as plain D and the piano link refused the right key. The word tokens
-  // ("flat"/"sharp") are what abcjs uses in key signatures; glyphs ("_"/"^")
-  // are what it uses on individual notes.
-  const ACC_WORD = { flat: -1, sharp: 1, natural: 0, dble_flat: -2, dble_sharp: 2,
-                     "dble-flat": -2, "dble-sharp": 2, "dbl-flat": -2, "dbl-sharp": 2 };
-  const events = [];
-  const allClasses = new Set();   // graces live here too: pressed = tolerated, never a miss
-  let keyAcc = {};
-  try {
-    for (const line of vis[0].lines) {
-      if (!line.staff) continue;
-      for (const staff of line.staff) {
-        if (staff.key && staff.key.accidentals) {
-          keyAcc = {};
-          for (const a of staff.key.accidentals) keyAcc[a.note.toUpperCase()] = a.acc;
-        }
-        for (const voice of staff.voices) {
-          for (const ev of voice) {
-            const isGrace = ev.grace || !!ev.graceNotes;
-            const pitches = ev.graceNotes ? ev.graceNotes.flatMap(g2 => g2.pitches || []) : (ev.pitches || []);
-            if (!pitches.length) continue;
-            const classes = [];
-            for (const p of pitches) {
-              const idx = ((p.pitch % 7) + 7) % 7;
-              let semi = LETTER_SEMIS[idx];
-              let accSemi = undefined;
-              if (p.accidental && ACC_SEMIS[p.accidental] !== undefined) accSemi = ACC_SEMIS[p.accidental];
-              else if (p.accidental && ACC_WORD[p.accidental] !== undefined) accSemi = ACC_WORD[p.accidental];
-              else if (p.name && p.name.includes("\u266f")) accSemi = 1;
-              else if (p.name && p.name.includes("\u266d")) accSemi = -1;
-              else if (p.name && p.name.includes("\u266e")) accSemi = 0;
-              else {
-                const keyTok = keyAcc["CDEFGAB"[idx]];
-                if (keyTok && ACC_WORD[keyTok] !== undefined) accSemi = ACC_WORD[keyTok];
-              }
-              if (accSemi !== undefined) semi += accSemi;
-              const cls = ((semi % 12) + 12) % 12;
-              classes.push(cls);
-              allClasses.add(cls);
-            }
-            if (!isGrace) events.push({ need: Array.from(new Set(classes)), got: [], done: false });
-          }
-        }
-      }
-    }
-  } catch (e) {}
-  return { events, allClasses: Array.from(allClasses) };
-}
-function followNote(cls) {
+// (requirements now come from computeEvents with the collector)
+
+function followNote(midi) {
   const f = window.__pfFollowOn ? pfFollow : null;
   if (!f || f.done) return;
+  const cur = f.order[f.i];
+  if (!cur) return;
   const base = window.__pfInfoBase || el("pfinfo").textContent;
-  // per-INSTANCE matching: every note head needs its own keypress, even when
-  // several heads share one chord. An event completes only when all of its
-  // members have been played; octave doubles inside a chord count once.
-  const needOf = ev2 => ev2.need.filter(c2 => c2 === cls).length;
-  const gotOf = ev2 => ev2.got.filter(c2 => c2 === cls).length;
-  const idx = f.events.findIndex(ev2 => !ev2.done && needOf(ev2) > gotOf(ev2));
-  if (idx !== -1) {
-    const ev2 = f.events[idx];
-    ev2.got.push(cls);
-    const complete = ev2.need.every(c2 => ev2.got.filter(g2 => g2 === c2).length >=
-      ev2.need.filter(n2 => n2 === c2).length);
-    if (complete) {
-      ev2.done = true;
-      stampTicks(ev2.need);
-    }
-  } else if (!f.allClasses.includes(cls)) {
+  if (!cur.midis.includes(midi)) {
+    if (f.tolerated.includes(midi)) return;   // grace notes are never a miss
     f.misses++;
+    el("pfinfo").textContent = base + "\u00a0\u00a0\u2713" + f.i + "/" + f.order.length +
+      "\u00a0\u00a0!" + f.misses;
+    return;
   }
-  const doneEvts = f.events.filter(ev2 => ev2.done).length;
-  el("pfinfo").textContent = base + "\u00a0\u00a0\u2713" + doneEvts + "/" + f.events.length +
-    (f.misses ? "\u00a0\u00a0!" + f.misses : "");
-  if (doneEvts === f.events.length && f.events.length) {
-    f.done = true;
-    if (el("pfauto").classList.contains("playing")) {
-      setTimeout(() => { if (window.__pfFollowOn) pfMove(1); }, 600);
+  if (!cur.got.includes(midi)) {
+    cur.got.push(midi);
+    tickLabelByExact(cur.label);
+  }
+  if (cur.got.length >= cur.midis.length) {
+    f.i++;
+    if (f.i >= f.order.length) {
+      f.done = true;
+      el("pfinfo").textContent = base + "\u00a0\u00a0\u2713 done";
+      if (el("pfauto").classList.contains("playing")) {
+        setTimeout(() => { if (window.__pfFollowOn) pfMove(1); }, 600);
+      }
+      return;
     }
+    el("pfinfo").textContent = base + "\u00a0\u00a0\u2713" + f.i + "/" + f.order.length;
   }
 }
-// tick every label whose letter class matches the played pitch class
-function stampTicks(classes) {
-  // tick the first unticked label whose written name matches any pitch class
-  // of the completed chord, including enharmonic spellings (D♭ or C♯,
-  // G♭ or F♯...) and naturals
-  const letters = "CDEFGAB";
-  const accs = [["", 0], ["\u266f", 1], ["\u266d", -1], ["\u266e", 0]];
-  const cands = [];
-  for (const cls of (classes || [])) {
-    for (let i = 0; i < 7; i++) {
-      for (const [ch2, semi] of accs) {
-        if (((LETTER_SEMIS[i] + semi) % 12 + 12) % 12 === cls) cands.push(letters[i] + ch2);
-      }
-    }
-  }
-  if (!cands.length) return;
+function tickLabelByExact(labelText) {
   for (const t of document.querySelectorAll("#pfbox svg text")) {
     const s = t.textContent || "";
     if (s.startsWith("=") || s.includes("\u2713")) continue;
-    for (const c2 of cands) {
-      const idx = s.indexOf(c2);
-      if (idx !== -1) {
-        // natural candidates must not hijack an accidental label ("E" != "E♭")
-        const nextChar = s.slice(idx + c2.length, idx + c2.length + 1);
-        if (c2.length === 1 && nextChar !== "" && "\u266f\u266d\u266e".includes(nextChar)) continue;
-        t.textContent = s + " \u2713";
-        return;
-      }
-    }
+    if (s === labelText) { t.textContent = s + " \u2713"; return; }
   }
 }
-
-// ---------- wiring ----------
-el("file").addEventListener("change", loadFile);
-el("names").addEventListener("change", () => { if (lastText) render(lastText); });
-el("size").addEventListener("input", () => {
-  el("sizeval").textContent = parseFloat(el("size").value).toFixed(1) + "\u00d7";
-});
-el("size").addEventListener("change", () => { if (lastText) render(lastText); });
-el("practice").addEventListener("click", (ev) => {
-  ev.stopPropagation();   // the click must not bubble into the paging handler,
-                         // which treated a right-half button click as "next measure"
-  pfEnter(ev);
-});
-el("pfsize").addEventListener("input", () => {
-  el("pfsizeval").textContent = parseFloat(el("pfsize").value).toFixed(1) + "\u00d7";
-});
-el("pfsize").addEventListener("change", pfRender);
-el("pfwin").addEventListener("change", () => {
-  const firstBar = pfPage * PF_WIN;
-  PF_WIN = Math.max(1, Math.min(3, parseInt(el("pfwin").value) || 1));
-  const lastWin = Math.max(0, Math.ceil(bars.length / PF_WIN) - 1);
-  pfPage = Math.min(Math.floor(firstBar / PF_WIN), lastWin);
-  pfRender();
-});
-el("pfvoice").addEventListener("click", () => {
-  pfVoice = pfVoice === "RH" ? "LH" : (pfVoice === "LH" ? "BOTH" : "RH");
-  el("pfvoice").textContent = pfVoice;
-  pfRender();
-});
-// re-render on release only (input event just updates the label to avoid double render)
-let pfDown = null;
-addEventListener("pointerdown", (ev) => {
-  if (!el("pf").classList.contains("on")) return;
-  pfDown = {x: ev.clientX, y: ev.clientY,
-    boxes: Array.from(document.querySelectorAll("#pfbox")).map(b2 => ({el: b2, sl: b2.scrollLeft, st: b2.scrollTop})),
-    moved: false};
-});
-addEventListener("pointermove", (ev) => {
-  if (!pfDown) return;
-  const dx = ev.clientX - pfDown.x, dy = ev.clientY - pfDown.y;
-  if (!pfDown.moved && Math.abs(dx) + Math.abs(dy) > 12) pfDown.moved = true;
-  if (pfDown.moved) pfDown.boxes.forEach(o => { o.el.scrollLeft = o.sl - dx; o.el.scrollTop = o.st - dy; });
-});
-addEventListener("pointerup", () => { setTimeout(() => { pfDown = null; }, 60); });
-addEventListener("click", (ev) => {
-  if (!el("pf").classList.contains("on")) return;   // practice overlay only
-  if (ev.target.closest("#pfexit")) { pfExit(); return; }
-  if (ev.target.closest("#pfvoice")) return;   // its own click handler manages the cycle
-  if (ev.target.closest("#pfbar")) return;     // slider interaction must not page
-  // drags/scrolls must not page: page only on a stationary tap
-  if (pfDown && Math.hypot(ev.clientX - pfDown.x, ev.clientY - pfDown.y) > 12) { pfDown = null; return; }
-  pfDown = null;
-  const w = window.innerWidth;
-  if (ev.clientX < w * 0.35) pfMove(-1);
-  else if (ev.clientX > w * 0.65) pfMove(1);
-});
-window.addEventListener("keydown", (e) => {
-  if (!el("pf").classList.contains("on")) return;
-  if (e.key === "ArrowRight") pfMove(1);
-  else if (e.key === "ArrowLeft") pfMove(-1);
-  else if (e.key === "Escape" || e.key === "End") pfExit();
-});
-window.addEventListener("resize", () => { if (el("pf").classList.contains("on")) pfRender(); });
-
-// ---------- playback (abcjs synth, local soundfont) ----------
 let liveSynth = null;
 const SF_URL = "/sf/FluidR3_GM/";
-const TRI = '<svg viewBox="0 0 10 12" class="tri"><path d="M1 1 L9 6 L1 11 Z"/></svg>';
-const SQ  = '<svg viewBox="0 0 10 12" class="tri"><rect x="2" y="2" width="7" height="8"/></svg>';
+const PLAY_SVG = '<svg viewBox="0 0 10 12" class="tri"><path d="M1 1 L9 6 L1 11 Z"/></svg>';
 function setPlayBtn(on) {
-  el("pfplay").innerHTML = on ? SQ : TRI;
+  el("playbtn").innerHTML = on
+    ? '<svg viewBox="0 0 10 12" class="tri"><rect x="1" y="1" width="8" height="10"/></svg>Stop'
+    : PLAY_SVG + "Play";
   el("pfplay").classList.toggle("playing", on);
-  const mb = el("playbtn");
-  mb.innerHTML = on ? SQ : TRI;
-  mb.classList.toggle("playing", on);
 }
 function stopPlay() {
   if (liveSynth) {
@@ -871,6 +756,64 @@ window.addEventListener("DOMContentLoaded", () => {
   el("pfauto").addEventListener("click", () => {
     el("pfauto").classList.toggle("playing");
   });
+  el("file").addEventListener("change", loadFile);
+  el("names").addEventListener("change", () => { if (lastText) render(lastText); });
+  el("size").addEventListener("input", () => {
+    el("sizeval").textContent = parseFloat(el("size").value).toFixed(1) + "\u00d7";
+  });
+  el("size").addEventListener("change", () => { if (lastText) render(lastText); });
+  el("practice").addEventListener("click", (ev) => {
+    ev.stopPropagation();   // a right-half click must not page
+    pfEnter(ev);
+  });
+  el("pfsize").addEventListener("input", () => {
+    el("pfsizeval").textContent = parseFloat(el("pfsize").value).toFixed(1) + "\u00d7";
+  });
+  el("pfsize").addEventListener("change", pfRender);
+  el("pfvoice").addEventListener("click", () => {
+    pfVoice = pfVoice === "RH" ? "LH" : (pfVoice === "LH" ? "BOTH" : "RH");
+    el("pfvoice").textContent = pfVoice;
+    pfRender();
+  });
+  el("pfwin").addEventListener("change", () => {
+    const firstBar = pfPage * PF_WIN;
+    PF_WIN = Math.max(1, Math.min(3, parseInt(el("pfwin").value) || 2));
+    const lastWin = Math.max(0, Math.ceil(bars.length / PF_WIN) - 1);
+    pfPage = Math.min(Math.floor(firstBar / PF_WIN), lastWin);
+    pfRender();
+  });
+  // practice: chord drift protection + tap paging
+  let pfDown = null;
+  addEventListener("pointerdown", (ev) => {
+    if (!el("pf").classList.contains("on")) return;
+    pfDown = {x: ev.clientX, y: ev.clientY,
+      boxes: Array.from(document.querySelectorAll("#pfbox")).map(b2 => ({el: b2, sl: b2.scrollLeft, st: b2.scrollTop})),
+      moved: false};
+  });
+  addEventListener("pointermove", (ev) => {
+    if (!pfDown) return;
+    const dx = ev.clientX - pfDown.x, dy = ev.clientY - pfDown.y;
+    if (!pfDown.moved && Math.abs(dx) + Math.abs(dy) > 12) pfDown.moved = true;
+    if (pfDown.moved) pfDown.boxes.forEach(o2 => { o2.el.scrollLeft = o2.sl - dx; o2.el.scrollTop = o2.st - dy; });
+  });
+  addEventListener("pointerup", () => { setTimeout(() => { pfDown = null; }, 60); });
+  addEventListener("click", (ev) => {
+    if (!el("pf").classList.contains("on")) return;
+    if (ev.target.closest("#pfexit")) { pfExit(); return; }
+    if (ev.target.closest("#pfvoice") || ev.target.closest("#pfbar") || ev.target.closest("#pfmidi") || ev.target.closest("#pfauto")) return;
+    if (pfDown && Math.hypot(ev.clientX - pfDown.x, ev.clientY - pfDown.y) > 12) { pfDown = null; return; }
+    pfDown = null;
+    const w = window.innerWidth;
+    if (ev.clientX < w * 0.35) pfMove(-1);
+    else if (ev.clientX > w * 0.65) pfMove(1);
+  });
+  window.addEventListener("keydown", (e) => {
+    if (!el("pf").classList.contains("on")) return;
+    if (e.key === "ArrowRight") pfMove(1);
+    else if (e.key === "ArrowLeft") pfMove(-1);
+    else if (e.key === "Escape" || e.key === "End") pfExit();
+  });
+  window.addEventListener("resize", () => { if (el("pf").classList.contains("on")) pfRender(); });
   const last = localStorage.getItem("scorelens-last");
   loadList().then(() => {
     if (last) for (const o of el("file").options) if (o.value === last) { el("file").value = last; break; }

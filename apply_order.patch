@@ -1,0 +1,116 @@
+import re
+
+path = '/opt/docker/scorelens/app/index.html'
+src = open(path).read()
+
+# ---- 1) computeEvents gains the collector (ordered midis + labels + tolerated graces) ----
+old = "function computeEvents(tune) {\n  const out = [];"
+new = """function computeEvents(tune, collector) {
+  const out = [];
+  // collector (optional): ordered required events for the piano link.
+  // midis are octave-strict; grace notes are tolerated, never required.
+  const midiOf = (p) => {
+    const oct = Math.floor(p.pitch / 7);
+    const idx = ((p.pitch % 7) + 7) % 7;
+    let midi = 60 + 12 * oct + LETTER_SEMIS[idx];
+    if (p.accidental && ACC_SEMIS[p.accidental] !== undefined) midi += ACC_SEMIS[p.accidental];
+    return midi;
+  };"""
+assert old in src, "anchor 1"
+src = src.replace(old, new)
+
+# ---- 2) graces: label + tolerated midi; note events: label + midis into collector ----
+old = """          if (ev.gracenotes && ev.gracenotes.length) {
+            for (const gi of ev.gracenotes) {
+              if (gi.name || gi.pitch !== undefined) {
+                outStaff.push({ name: headName({ name: gi.name, pitch: gi.pitch, accidental: gi.accidental }), count: 1 });
+              }
+            }
+          }
+          if (ev.el_type !== "note" || !ev.pitches) continue;
+          outStaff.push({ name: ev.pitches.map(headName).join("\\u2009"), count: ev.pitches.length });"""
+new = """          if (ev.gracenotes && ev.gracenotes.length) {
+            for (const gi of ev.gracenotes) {
+              if (gi.name || gi.pitch !== undefined) {
+                const gp = { name: gi.name, pitch: gi.pitch, accidental: gi.accidental };
+                outStaff.push({ name: headName(gp), count: 1 });
+                if (collector) collector.tolerated.push(midiOf(gp));
+              }
+            }
+          }
+          if (ev.el_type !== "note" || !ev.pitches) continue;
+          const label = ev.pitches.map(headName).join("\\u2009");
+          outStaff.push({ name: label, count: ev.pitches.length });
+          if (eventsOut) eventsOut.push({ midis: ev.pitches.map(midiOf), label: label });"""
+assert old in src, "anchor 2"
+src = src.replace(old, new)
+
+# ---- 3) replace the follow state + matcher + stampTicks wholesale ----
+# find the span: from 'function followNote' through the end of stampTicks
+i = src.index('let pfFollow = { events: [], pending: 0, misses: 0, done: false };')
+if i == -1:
+    raise SystemExit("pfFollow anchor missing")
+# locate stampTicks end
+ts = src.index('function stampTicks')
+m = re.search(r"\n\}\n(?=function )", src[ts:])
+assert m, "stampTicks end"
+# also the old followNote + onPianoNote span BEFORE stampTicks
+fn_start = src.index('function followNote')
+fn_end = src.index('function stampTicks')
+# onPianoNote precedes followNote
+op_start = src.rindex('window.__onPianoNote = onPianoNote;', 0, fn_start)
+NEW = """window.__onPianoNote = onPianoNote;
+function followNote(midi) {
+  const f = window.__pfFollowOn ? pfFollow : null;
+  if (!f || f.done) return;
+  const cur = f.order[f.i];
+  if (!cur) return;
+  const base = window.__pfInfoBase || el("pfinfo").textContent;
+  if (cur.midis.includes(midi)) {
+    if (!cur.got.includes(midi)) {
+      cur.got.push(midi);
+      tickLabelByExact(cur.label);
+    }
+    if (cur.got.length >= cur.midis.length) {
+      f.i++;
+      if (f.i >= f.order.length) {
+        f.done = true;
+        el("pfinfo").textContent = base + "\\u00a0\\u00a0\\u2713 done";
+        if (el("pfauto").classList.contains("playing")) {
+          setTimeout(() => { if (window.__pfFollowOn) pfMove(1); }, 600);
+        }
+        return;
+      }
+      const next = f.order[f.i];
+      el("pfinfo").textContent = base + "\\u00a0\\u00a0\\u2713" + f.i + "/" + f.order.length;
+      return;   // chord: keep going (both keys pressed together work)
+    }
+    return;
+  }
+  if (f.tolerated.includes(midi)) return;   // grace notes are always tolerated
+  f.misses++;
+  el("pfinfo").textContent = base + "\\u00a0\\u00a0\\u2713" + f.i + "/" + f.order.length +
+    "\\u00a0\\u00a0!" + f.misses;
+}
+function tickLabelByExact(labelText) {
+  for (const t of document.querySelectorAll("#pfbox svg text")) {
+    const s = t.textContent || "";
+    if (s.startsWith("=") || s.includes("\\u2713")) continue;
+    if (s === labelText) { t.textContent = s + " \\u2713"; return; }
+  }
+}
+"""
+on_old = src[op_start:fn_end]
+m2 = re.search(r"function onPianoNote\(midi, on\) \{[\s\S]*?\n\}", on_old)
+assert m2, "onPianoNote body"
+src = src[:op_start] + "window.__onPianoNote = onPianoNote;\nfunction onPianoNote(midi, on) {\n  if (!on) return;\n  if (!el(\"pf\").classList.contains(\"on\")) return;\n  if (window.__pfFollowOn) followNote(midi);\n}\n" + src[fn_end:]
+
+# pfFollow decl replace
+old = 'let pfFollow = { events: [], pending: 0, misses: 0, done: false };'
+if old not in src:
+    old = 'let pfFollow = { events: [], misses: 0, done: false };'
+assert old in src, "pfFollow decl"
+src = src.replace(old, 'let pfFollow = { order: [], tolerated: [], i: 0, misses: 0, done: false };')
+
+open(path, 'w').write(src)
+print("all anchors ok")
