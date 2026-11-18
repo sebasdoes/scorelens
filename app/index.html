@@ -567,7 +567,7 @@ function pfExit() {
 // (window flips when its pitch classes are played), tally (✓ on labels).
 // Feedback is text/tick only by design (achromatopsia — no color coding).
 let midiAccess = null, midiInput = null, midiWanted = false;
-let pfFollow = { events: [], pending: 0, misses: 0, done: false };
+let pfFollow = { events: [], misses: 0, done: false };
 const LETTER_SEMIS = {0: 0, 1: 2, 2: 4, 3: 5, 4: 7, 5: 9, 6: 11};
 const ACC_SEMIS = {"^": 1, "__": -2, "^^": 2, "_": -1, "=": 0};
 function pianoToggle() {
@@ -682,7 +682,7 @@ function computeRequired(vis) {
               classes.push(cls);
               allClasses.add(cls);
             }
-            if (!isGrace) events.push({ classes, matched: false });
+            if (!isGrace) events.push({ need: Array.from(new Set(classes)), got: [], done: false });
           }
         }
       }
@@ -694,42 +694,47 @@ function followNote(cls) {
   const f = window.__pfFollowOn ? pfFollow : null;
   if (!f || f.done) return;
   const base = window.__pfInfoBase || el("pfinfo").textContent;
-  // one MUSICAL EVENT per match: an octave-doubled chord ([Gg]) is one event,
-  // so playing either key of it - even both - marks the event once and never
-  // counts the second key as a miss.
-  const idx = f.events.findIndex(ev2 => !ev2.matched && ev2.classes.includes(cls));
+  // per-INSTANCE matching: every note head needs its own keypress, even when
+  // several heads share one chord. An event completes only when all of its
+  // members have been played; octave doubles inside a chord count once.
+  const needOf = ev2 => ev2.need.filter(c2 => c2 === cls).length;
+  const gotOf = ev2 => ev2.got.filter(c2 => c2 === cls).length;
+  const idx = f.events.findIndex(ev2 => !ev2.done && needOf(ev2) > gotOf(ev2));
   if (idx !== -1) {
-    f.events[idx].matched = true;
-    stampTicks(cls);
-    f.pending = f.events.filter(ev2 => !ev2.matched).length;
-    const done = f.pending === 0;
-    el("pfinfo").textContent = base + (done ? "\u00a0\u00a0\u2713 done" :
-      "\u00a0\u00a0\u2713" + (f.events.length - f.pending) + "/" + f.events.length +
-      (f.misses ? "\u00a0\u00a0!" + f.misses : ""));
-    if (done) {
-      f.done = true;
-      if (el("pfauto").classList.contains("playing")) {
-        setTimeout(() => { if (window.__pfFollowOn) pfMove(1); }, 600);
-      }
+    const ev2 = f.events[idx];
+    ev2.got.push(cls);
+    const complete = ev2.need.every(c2 => ev2.got.filter(g2 => g2 === c2).length >=
+      ev2.need.filter(n2 => n2 === c2).length);
+    if (complete) {
+      ev2.done = true;
+      stampTicks(ev2.need);
     }
   } else if (!f.allClasses.includes(cls)) {
-    // genuinely foreign note: count one miss (repeats of the same wrong key
-    // do not spam)
     f.misses++;
-    el("pfinfo").textContent = base + "\u00a0\u00a0\u2713" + (f.events.length - f.pending) + "/" +
-      f.events.length + "\u00a0\u00a0!" + f.misses;
+  }
+  const doneEvts = f.events.filter(ev2 => ev2.done).length;
+  el("pfinfo").textContent = base + "\u00a0\u00a0\u2713" + doneEvts + "/" + f.events.length +
+    (f.misses ? "\u00a0\u00a0!" + f.misses : "");
+  if (doneEvts === f.events.length && f.events.length) {
+    f.done = true;
+    if (el("pfauto").classList.contains("playing")) {
+      setTimeout(() => { if (window.__pfFollowOn) pfMove(1); }, 600);
+    }
   }
 }
 // tick every label whose letter class matches the played pitch class
-function stampTicks(cls) {
-  // tick the first unticked label whose written name matches the pitch class,
-  // including enharmonic spellings (D♭ or C♯, G♭ or F♯...) and naturals
+function stampTicks(classes) {
+  // tick the first unticked label whose written name matches any pitch class
+  // of the completed chord, including enharmonic spellings (D♭ or C♯,
+  // G♭ or F♯...) and naturals
   const letters = "CDEFGAB";
   const accs = [["", 0], ["\u266f", 1], ["\u266d", -1], ["\u266e", 0]];
   const cands = [];
-  for (let i = 0; i < 7; i++) {
-    for (const [ch2, semi] of accs) {
-      if (((LETTER_SEMIS[i] + semi) % 12 + 12) % 12 === cls) cands.push(letters[i] + ch2);
+  for (const cls of (classes || [])) {
+    for (let i = 0; i < 7; i++) {
+      for (const [ch2, semi] of accs) {
+        if (((LETTER_SEMIS[i] + semi) % 12 + 12) % 12 === cls) cands.push(letters[i] + ch2);
+      }
     }
   }
   if (!cands.length) return;
