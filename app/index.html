@@ -1,0 +1,827 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Scorelens</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="abcjs-basic-min.js"></script>
+<style>
+  :root { color-scheme: light; -webkit-text-size-adjust: 100%; text-size-adjust: 100%;
+          --bg: #ffffff; --ink: #000000; --muted: #444444;
+          --border: #000000; --accent: #000000; }
+  :root[data-theme="dark"] { color-scheme: dark; --bg: #111111; --ink: #f2f2f2;
+          --muted: #aaaaaa; --border: #f2f2f2; --accent: #f2f2f2; }
+  :root[data-theme="hc"] { color-scheme: dark; --bg: #000000; --ink: #ffffff;
+          --muted: #ffffff; --border: #ffffff; --accent: #ffffff; }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font-family: system-ui, sans-serif;
+    margin: 0.7rem; font-size: 16px;
+  }
+  .bar { display: flex; flex-wrap: nowrap; gap: 0.4rem; align-items: center; margin-bottom: 0.45rem; }
+  .row1 #file, #file { width: 100%; flex: 1 1 auto; }
+  .row2, .row3 { justify-content: flex-start; }
+  .row3 #theme { width: 100%; flex: 1 1 auto; }   /* theme fills the rest of the row on mobile */
+  /* desktop: all three rows collapse onto one line */
+  @media (min-width: 1101px) {
+    .bar { display: inline-flex; vertical-align: middle; margin-bottom: 0.45rem; margin-right: 0.7rem; }
+    #file { width: auto; max-width: 300px; min-width: 170px; }
+    #theme { width: auto; min-width: 131px; }
+    }
+  .bar label { font-size: 16px; }
+  select { font-size: 16px; padding: 3px 6px; border: 2px solid var(--border); background: var(--bg); color: var(--ink); }
+  button { font-size: 15px; padding: 3px 9px; border: 2px solid var(--border); background: var(--bg); color: var(--ink); cursor: pointer; }
+  button:active { background: var(--accent); color: var(--bg); }
+  input[type="checkbox"] { width: 22px; height: 22px; vertical-align: middle; accent-color: var(--ink); }
+  input[type="range"] { width: 140px; vertical-align: middle; accent-color: var(--ink); }
+  #paper { overflow-x: auto; margin-top: 0.5rem; padding-bottom: 12px; }
+  #paper svg { max-width: none; overflow: visible; color: var(--ink); background: var(--bg); }
+  #pf { display: none; position: fixed; inset: 0; background: var(--bg); z-index: 50; touch-action: manipulation; }
+  #pf.on { display: block; }
+  #pfpaper { position: absolute; inset: 0; overflow-y: auto; overflow-x: hidden; padding-top: 46px; box-sizing: border-box; }
+  #pfpaper svg { max-width: none; overflow: visible; color: var(--ink); background: var(--bg); margin: 0 auto; display: block; }
+  #pfwrap { position: absolute; left: 8px; right: 8px; top: 46px; bottom: 8px;
+            display: flex; flex-direction: column; gap: 2px; overflow: hidden; }
+  #pfbox { flex: 1 1 0; min-height: 0; overflow: auto; text-align: left; }
+  #pfbox svg { color: var(--ink); }
+  #pfcap { flex: 0 0 20px; font-size: 14px; font-weight: bold; margin: 0 2px; color: var(--ink); }
+  #pfinfo { position: fixed; top: 6px; left: 10px; font-size: 15px; z-index: 55; color: var(--ink); }
+  #pfbar { position: fixed; top: 5px; right: 48px; z-index: 55;
+           display: flex; align-items: center; gap: 6px; }
+  #pfbar label.pfzoom { display: none; }   /* zoom slider hidden for now */
+  #pfwinlabel { display: inline-flex; align-items: center; gap: 4px; font-size: 14px; }
+  #pfwin { width: 56px; accent-color: var(--ink); }
+  #pfexit { position: fixed; top: 5px; right: 6px; z-index: 60;
+            height: 30px; box-sizing: border-box; }
+  #pfvoice { height: 30px; box-sizing: border-box; }
+  .status { font-size: 15px; color: var(--muted); }
+  .error { font-weight: bold; }
+  #pfbox svg .abcjs-tempo, #paper svg .abcjs-tempo { display: none; }
+  .playing { background: var(--accent); color: var(--bg); }
+  #pfplay, #playbtn { padding: 5px 11px; }
+  #playbtn { vertical-align: middle; }
+  #pfplay, #playbtn { padding: 5px 11px; }
+  #playbtn { vertical-align: middle; }
+  .tri { width: 13px; height: 15px; vertical-align: -2px; margin-right: 6px; fill: currentColor; }
+  #pfplay .tri { margin-right: 0; vertical-align: -1px; }
+  #pfplay svg.tri, #playbtn svg.tri { display: inline-block; }
+  #pfplay { display: inline-flex; align-items: center; justify-content: center; height: 30px; padding: 4px 12px; box-sizing: border-box; }
+  #playbtn { display: inline-flex; align-items: center; }
+  .nnicon { font-size: 17px; margin-right: 2px; }
+  #pfinfo, #pfcap { color: var(--ink); }
+  #pftoast { position: fixed; bottom: 10px; left: 50%; transform: translateX(-50%);
+             max-width: 92%; background: var(--accent); color: var(--bg);
+             padding: 6px 14px; border-radius: 6px; font-size: 15px;
+             z-index: 70; opacity: 0; transition: opacity .25s; pointer-events: none;
+             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #pftoast.show { opacity: 1; }
+</style>
+</head>
+<body>
+  <div class="bar row1">
+    <select id="file"></select>
+  </div>
+  <div class="bar row2">
+    <label>Zoom: <input type="range" id="size" min="1" max="3" step="0.1" value="2">
+      <span id="sizeval">2.0&times;</span></label>
+    <label><input type="checkbox" id="names" checked><span class="nnicon">&#9834;</span>A</label>
+  </div>
+  <div class="bar row3">
+    <button id="playbtn" type="button"><svg viewBox="0 0 10 12" class="tri"><path d="M1 1 L9 6 L1 11 Z"/></svg></button>
+    <button id="practice" type="button">Practice</button>
+    <select id="theme">
+      <option value="light">White</option>
+      <option value="dark">Dark</option>
+      <option value="hc">High contrast</option>
+    </select>
+    <span class="status" id="status"></span>
+  </div>
+  <div id="paper"></div>
+
+  <div id="pf">
+    <div id="pfinfo"></div>
+    <div id="pfbar"><button id="pfplay" type="button"><svg viewBox="0 0 10 12" class="tri"><path d="M1 1 L9 6 L1 11 Z"/></svg></button><button id="pfvoice" type="button">RH</button><button id="pfmidi" type="button">MIDI</button><button id="pfauto" type="button">Auto</button><label id="pfwinlabel">Bars <input id="pfwin" type="range" min="1" max="3" step="1" value="1"></label><label class="pfzoom" style="margin-left:8px">Size: <input type="range" id="pfsize" min="1" max="4" step="0.1" value="2"> <span id="pfsizeval">2.0&times;</span></label></div>
+    <button id="pfexit" type="button">&#10005;</button>
+    <span id="pftoast"></span>
+    <div id="pfpaper"></div>
+  </div>
+
+<script>
+"use strict";
+const svgNS = "http://www.w3.org/2000/svg";
+const GLYPH = {
+  flat: "\u266d", natural: "\u266e", sharp: "\u266f",
+  dblflat: "\u266d\u266d", dblsharp: "\u266f\u266f",
+  quarterflat: "\u266d", quartersharp: "\u266f"
+};
+const el = id => document.getElementById(id);
+
+let files = [];
+
+let toastTimer = null;
+function status(msg, isErr) {
+  const s = el("status");
+  if (s) { s.textContent = msg || ""; s.className = isErr ? "status error" : "status"; }
+  const to = document.getElementById("pftoast");
+  if (!to) return;
+  if (msg && (isErr || el("pf").classList.contains("on"))) {
+    to.textContent = msg;
+    to.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => to.classList.remove("show"), 4500);
+  } else to.classList.remove("show");
+}
+
+// ---------- file list ----------
+async function loadList() {
+  try {
+    const entries = await (await fetch("files/")).json();
+    files = entries.filter(e => e.type === "file" && e.name.toLowerCase().endsWith(".abc"));
+    const sel = el("file");
+    sel.innerHTML = "";
+    if (!files.length) { status("No .abc files in the folder yet.", true); return; }
+    for (const f of files) {
+      const o = document.createElement("option");
+      o.value = "files/" + f.name;
+      o.dataset.name = f.name;
+      o.textContent = f.name;
+      sel.appendChild(o);
+    }
+    await loadFile();
+  } catch (e) {
+    status("List fetch failed: " + e.message, true);
+  }
+}
+
+async function markLoaded() {
+  const sel = el("file");
+  for (const o of sel.options) o.textContent = o.dataset.name || o.textContent.replace(/ ✓$/, "");
+  const cur = sel.options[sel.selectedIndex];
+  if (cur) {
+    cur.dataset.name = cur.textContent.replace(/ ✓$/, "");
+    cur.textContent = cur.dataset.name + " ✓";
+  }
+}
+
+async function loadFile() {
+  const path = el("file").value;
+  if (!path) return;
+  try {
+    const text = await (await fetch(path)).text();
+    render(text);
+    markLoaded();
+    localStorage.setItem("scorelens-last", path);
+  } catch (e) {
+    status("Load failed: " + e.message, true);
+  }
+}
+
+// ---------- note-name computation from the abcjs parse ----------
+// Walk the parsed tune in the same order abcjs draws it. Sounding name per
+// head: explicit accidental wins, else the last explicit accidental on that
+// letter this bar, else the key signature.
+// Returns an array indexed BY SYSTEM, each = array per staff of
+// {name, count} events (chords as one entry with `count` heads).
+function computeEvents(tune) {
+  const out = [];           // out[systemIdx] = [staffIdx][eventIdx]
+  let keyAcc = {};
+  let barAcc = {};
+  function headName(p) {
+    const L0 = (p.name || "").replace(/[,']/g, "").toUpperCase();
+    const L = L0.replace(/[♯♭♮^_]/g, "");   // abcjs may embed the accidental in name (e.g. "^G♯") — keep the letter only
+    let g;
+    if (p.accidental) g = GLYPH[p.accidental] || "";
+    else if (barAcc[L]) g = barAcc[L];
+    else if (keyAcc[L] === "flat") g = GLYPH.flat;
+    else if (keyAcc[L] === "sharp") g = GLYPH.sharp;
+    else g = "";
+    if (p.accidental) barAcc[L] = g;
+    return L + g;
+  }
+  for (const line of tune.lines) {
+    if (!line.staff) continue;      // text/meta-only line: no system drawn
+    const byStaff = line.staff.map(() => []);
+    for (const staff of line.staff) {
+      const si = line.staff.indexOf(staff);
+      const outStaff = byStaff[si];
+      if (staff.key && staff.key.accidentals) {
+        keyAcc = {};
+        for (const a of staff.key.accidentals) keyAcc[a.note.toUpperCase()] = a.acc;
+      }
+      for (const voice of staff.voices) {
+        for (const ev of voice) {
+          if (ev.el_type === "bar") { barAcc = {}; continue; }
+          if (ev.el_type !== "note" || !ev.pitches) continue;
+          outStaff.push({ name: ev.pitches.map(headName).join("\u2009"), count: ev.pitches.length });
+        }
+      }
+    }
+    out.push(byStaff);
+  }
+  return out;
+}
+
+// ---------- render ----------
+let lastText = "";
+function render(text) {
+  lastText = text;
+  const scale = parseFloat(el("size").value);
+  const withNames = el("names").checked;
+  el("paper").innerHTML = "";
+  let vis;
+  try {
+    vis = ABCJS.renderAbc("paper", text, {
+      scale: 1,
+      add_classes: true,
+      staffwidth: 1100,
+      paddingtop: 8, paddingbottom: 26, paddingleft: 4, paddingright: 4,
+      wrap: false
+    });
+  } catch (e) {
+    status("Render error: " + e.message, true);
+    return;
+  }
+  if (withNames) stampNames(vis);
+  // ink-bbox viewBox fit: fills the screen width on any device (practice mode
+  // mechanism); slider = zoom, 2.0 = fit
+  const k = Math.max(0.25, scale / 2);
+  document.querySelectorAll("#paper svg").forEach(svg => {
+    const bb = svg.getBBox();
+    svg.setAttribute("viewBox", bb.x + " " + (bb.y - 2) + " " + (bb.width + 8) + " " + (bb.height + 4));
+    svg.setAttribute("preserveAspectRatio", "xMidYMin meet");
+    svg.removeAttribute("width");
+    svg.removeAttribute("height");
+    svg.style.cssText = "width:" + (k * 100) + "%;height:auto;display:block;";
+  });
+  window.__scorelensDebug = {vis: vis, withNames: withNames};
+}
+
+function stampNames(vis, rootSel, laneGap) {
+  const svgs = document.querySelectorAll(rootSel || "#paper svg");
+  const GAP = laneGap || LANE_GAP;
+  for (let t = 0; t < vis.length; t++) {
+    const tune = vis[t];
+    const svg = svgs[t];
+    if (!svg) continue;
+    const eventsBySystem = computeEvents(tune);
+    // each top-level staff-wrapper = one system, drawn in tune.lines order
+    const lineGroups = Array.from(svg.children).filter(g => g.getAttribute && /(^|\s)abcjs-l\d+/.test(g.getAttribute("class") || ""));
+    let sysIdx = 0; // system counter over staff-having lines
+    for (const lg of lineGroups) {
+      const sysEvents = eventsBySystem[sysIdx++] || [];
+      // staff lines: long horizontal strokes — abcjs renders them as thin rect
+      // <path>s in Chromium but <line> elements in Firefox; accept both
+      const strokes = Array.from(lg.querySelectorAll("path, line"))
+        .map(el => {
+          if (el.tagName.toLowerCase() === "line") {
+            const y1 = parseFloat(el.getAttribute("y1")), y2 = parseFloat(el.getAttribute("y2"));
+            const x1 = parseFloat(el.getAttribute("x1")), x2 = parseFloat(el.getAttribute("x2"));
+            if (isNaN(y1)) return null;
+            const horiz = Math.abs(y2 - y1) < 1;
+            const len = Math.abs(x2 - x1);
+            return horiz && len > 50 ? { el, y: y1 } : null;
+          }
+          const d = el.getAttribute("d") || "";
+          if (el.getAttribute("data-name")) return null;
+          const m = d.match(/^M\s*([-\d.]+)\s+([-\d.]+)\s+L\s*([-\d.]+)\s+([-\d.]+)/i);
+          if (!m) return null;
+          const a = parseFloat(m[1]), b = parseFloat(m[2]), c = parseFloat(m[3]), e = parseFloat(m[4]);
+          if (Math.abs(c - a) < 50) return null;            // not wide → not a staff line
+          if (Math.abs(e - b) > 5) return null;             // first segment not horizontal
+          return { el, y: b };
+        })
+        .filter(Boolean)
+        .sort((p, q) => p.y - q.y);
+      const chunk = strokes.length / 5 | 0; // staff count in this system
+      if (chunk < 1 || sysEvents.length < chunk) continue;
+      const tops = [], bottoms = [];
+      for (let s = 0; s < chunk; s++) {
+        const chunkYs = strokes.slice(s * 5, s * 5 + 5).map(r => r.y);
+        tops[s] = chunkYs[0];
+        bottoms[s] = chunkYs[chunkYs.length - 1];
+      }
+      // head→staff by bands halfway between adjacent staves
+      const perStaffHeads = Array.from({ length: chunk }, () => []);
+      for (const h of lg.querySelectorAll(".abcjs-notehead")) {
+        let bb;
+        try { bb = h.getBBox(); } catch (e) { continue; }
+        if (!bb) continue;
+        const cy = bb.y + bb.height / 2;
+        let s = 0;
+        while (s < chunk - 1 && cy > (bottoms[s] + tops[s + 1]) / 2) s++;
+        // ink bottom of the whole note element (head + stem + ledger):
+        let ink = bb.y + bb.height;
+        const grp = h.closest("g[data-name]") || h.parentNode;
+        if (grp && grp !== h) {
+          try {
+            const gb = grp.getBBox();
+            if (gb && gb.y + gb.height > ink) ink = gb.y + gb.height;
+          } catch (e) {}
+        }
+        perStaffHeads[s].push({ bb, ink });
+      }
+      // uniform lane per staff: GAP below the bottom line, pushed below any
+      // deep note ink, but never into the next staff
+      const lanes = [];
+      for (let s = 0; s < chunk; s++) {
+        let lane = bottoms[s] + GAP;
+        for (const h of perStaffHeads[s]) {
+          if (h.ink + 9 > lane) lane = h.ink + 9;
+        }
+        if (s < chunk - 1) lane = Math.min(lane, tops[s + 1] - 12);
+        lanes[s] = lane;
+      }
+      // zip heads to events per staff in walk order; chords consume `count`
+      // heads, label centered on their mean x, y = uniform lane per staff
+      for (let s = 0; s < chunk; s++) {
+        const events = sysEvents[s] || [];
+        const heads = perStaffHeads[s];
+        let ptr = 0;
+        for (const ev of events) {
+          if (ptr + ev.count > heads.length) break;
+          let x = 0;
+          for (let i = 0; i < ev.count; i++) x += heads[ptr + i].bb.x + heads[ptr + i].bb.width / 2;
+          x /= ev.count;
+          ptr += ev.count;
+          const txt = document.createElementNS(svgNS, "text");
+          txt.setAttribute("x", x);
+          txt.setAttribute("y", lanes[s]);
+          txt.setAttribute("text-anchor", "middle");
+          txt.setAttribute("font-size", "11");
+          txt.setAttribute("font-family", "system-ui, sans-serif");
+          txt.setAttribute("font-weight", "bold");
+          txt.textContent = ev.name;
+          lg.appendChild(txt);
+        }
+      }
+    }
+  }
+}
+const LANE_GAP = 16;
+
+// ---------- practice mode (2-measure full-screen pages) ----------
+let PF_WIN = 1;           // measures per practice window (slider 1-3)
+const PF_SW = 240 * PF_WIN; // staffwidth ≈ natural width of the fragment (no stretch)
+let headerLines = [];     // everything before the first "% bar N"
+let hM = "4/4", hL = "1/8", hK = "C", hQ = "";
+let bars = [];            // [{n, lines:[...]}] — bar blocks in file order
+let lastTitle = "";       // T: header fieldcks in file order
+let pfPage = 0;           // window index
+let pfVoice = "V:1";      // which staff to show in practice mode (V:1=RH, V:2=LH)
+
+function parseBars(text) {
+  const lines = text.replace(/\r/g, "").split("\n");
+  headerLines = [];
+  bars = [];
+  let cur = null;
+  lastTitle = "";
+  hM = hL = hK = hQ = "";
+  let inHeader = true;
+  for (const line of lines) {
+    const t2 = line.match(/^T:\s*(.*)$/);
+    if (t2 && !lastTitle) lastTitle = t2[1].trim();
+    if (!cur) {
+      let m2 = line.match(/^(M|L|K|Q):\s*(.*)$/);
+      if (m2) { if (m2[1] === "M") hM = m2[2].trim(); else if (m2[1] === "L") hL = m2[2].trim(); else if (m2[1] === "K") hK = m2[2].trim(); else if (m2[1] === "Q") hQ = m2[2].trim(); }
+    }
+    const m = line.match(/^% bar (\d+)(.*)$/);
+    if (m) { cur = { n: +m[1], lines: [line] }; bars.push(cur); continue; }
+    if (cur) {
+      if (/^\[V:/.test(line) || /^%/.test(line) || /^\[K:/.test(line)) cur.lines.push(line);
+      continue;
+    }
+    if (!/^% bar/.test(line)) headerLines.push(line);
+  }
+}
+
+function stripStructure(line) {
+  // window fragments must parse without repeat/volta context
+  const s = line.replace(/\|1,3/g, "").replace(/:\|2/g, "|").replace(/\|:/g, "|").replace(/:\|/g, "|");
+  // drop lines that are only a barline (repeat-close leftovers → phantom measures)
+  if (/^\[V:[^\]]*\][\s|:.,]*$/.test(s)) return null;
+  return s;
+}
+
+function pfRender() {
+  stopPlay();
+  const startIdx = Math.min(pfPage * PF_WIN, Math.floor((bars.length - 1) / PF_WIN) * PF_WIN);
+  pfPage = startIdx / PF_WIN;
+  const slice = bars.slice(startIdx, startIdx + PF_WIN);
+  if (!slice.length) return;
+  // B14: svg viewBox = INK bounding box (labels included) -> "meet" fills the
+  // screen box edge to edge on the binding axis; slider = zoom (k = slider/2,
+  // 2.0 = exact fit); zoomed views anchor top-left and scroll.
+  const stripJoin = (b, voice) => {
+    const s = stripStructure(b.lines.filter(l => l.startsWith("[" + voice + "]")).join(""));
+    return (s === null ? "" : s).replace(/^\[V:\d+\]\s*/, "").trim();
+  };
+  const k = Math.max(0.25, parseFloat(el("pfsize").value) / 2);
+  try {
+    let vis = null;
+    // fragment header derives from the FILE (M/L/K/Q vary per piece: bliss is
+  // 12/8 K:E, Time Flows K:C->G) — a hardcoded Hitchcock header put Time Flows'
+  // G-section bars under K:Db (wrong accidentals), bliss under 4/4 K:Db.
+  // music lines per voice, JOINED into one line so abcjs does not wrap each
+  // bar into its own system; a mid-window [K:...] change breaks the line
+  // (legal position) and the following bars continue on the next line
+  const collect = (voice) => {
+    const out = [], seg = [];
+    const flush = () => { if (seg.length) out.push(seg.join(" ")); seg.length = 0; };
+    for (const b of slice) {
+      for (const line of b.lines) {
+        if (/^\[K:/.test(line)) { flush(); out.push(line.replace(/^\[|\]$/g, "")); continue; }
+        if (voice && !line.startsWith("[" + voice + "]")) continue;
+        const s = stripStructure(line);
+        if (s !== null) seg.push(s.replace(/^\[V:\d+\]\s*/, "").trim());
+      }
+    }
+    flush();
+    return out;
+  };
+  const buildSingle = (pfx) => {
+    const head2 = ["M:" + (hM || "4/4"), "L:" + (hL || "1/8")];
+    if (hQ) head2.push("Q:" + hQ);
+    head2.push("K:" + (hK || "C").replace(/\s*$/, ""));
+    head2.push(pfx + (pfx === "V:1" ? " clef=treble" : " clef=bass"));
+    const body = collect(pfx);
+    // single-line music must all sit after the voice declaration: abcjs starts
+    // a system per line, so a lone "K:G" line is fine but music lines are one
+    // line per key segment
+    const lines = [];
+    for (const l of body) lines.push(/^(K|V|M|L|Q):/.test(l) ? l : l);
+    return head2.join("\n") + "\n" + lines.join("\n") + "\n";
+  };
+    const opts = {
+      scale: 1, add_classes: true, staffwidth: 1100,
+      paddingtop: 8, paddingbottom: 26, paddingleft: 4, paddingright: 4,
+      wrap: false
+    };
+    const boxes = () => Array.from(document.querySelectorAll("#pfbox"));
+    const fitSvgIn = (container) => {
+      const svg = container.querySelector("svg");
+      if (!svg) return;
+      const bb = svg.getBBox();
+      svg.setAttribute("viewBox", (bb.x) + " " + (bb.y - 2) + " " + (bb.width + 8) + " " + (bb.height + 4));
+      svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+      svg.removeAttribute("width");
+      svg.removeAttribute("height");
+      svg.style.cssText = "width:" + (k * 100) + "%;height:" + (k * 100) + "%;display:block;";
+    };
+    (async () => {
+      try {
+        el("pfpaper").innerHTML = "";
+        const wrap = document.createElement("div");
+        wrap.id = "pfwrap";
+        el("pfpaper").appendChild(wrap);
+        if (pfVoice === "BOTH") {
+          // one entity: joined grand staff (aligned barlines/beat positions),
+          // same as the main page renderer
+          const v1 = slice.map(b => stripJoin(b, "V:1")).join(" ");
+          const v2 = slice.map(b => stripJoin(b, "V:2")).join(" ");
+          const ghead = ["M:" + (hM || "4/4"), "L:" + (hL || "1/8")];
+          if (hQ) ghead.push("Q:" + hQ);
+          ghead.push("K:" + (hK || "C").replace(/\s*$/, ""));
+          const g1 = collect("V:1"), g2 = collect("V:2");
+          const grand = ghead.concat(["%%score { 1 2 }",
+            "V:1 clef=treble", g1.join("\n"), "V:2 clef=bass", g2.join("\n")]).join("\n");
+          const box = document.createElement("div");
+          box.id = "pfbox";
+          wrap.appendChild(box);
+          vis = ABCJS.renderAbc(box, grand, opts);
+        } else {
+          const box = document.createElement("div");
+          box.id = "pfbox";
+          wrap.appendChild(box);
+          vis = ABCJS.renderAbc(box, buildSingle(pfVoice === "RH" ? "V:1" : "V:2"), opts);
+        }
+        const settled = await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        stampNames(vis, "#pfbox svg", 10);
+        await new Promise(r => requestAnimationFrame(r));
+        boxes().forEach(fitSvgIn);
+        
+        window.__pfVis = vis;
+        // follow scoring: required pitch classes of the DISPLAYED voice(s)
+        window.__pfFollowOn = !!midiInput;
+        pfFollow = { required: computeRequired(vis), played: new Set(), misses: 0, done: false };
+        if (window.__pfFollowOn) window.__pfInfoBase = el("pfinfo").textContent;
+        // duet: pre-render the opposite voice for the accompanist
+        window.__pfAccVis = null;
+        if ((pfVoice === "RH" || pfVoice === "LH") && midiInput) {
+          const opp = pfVoice === "RH" ? "V:2" : "V:1";
+          const hd = document.getElementById("pfhidden") || (() => {
+            const d2 = document.createElement("div");
+            d2.id = "pfhidden"; d2.style.cssText = "position:absolute;left:-9999px;top:0;";
+            document.body.appendChild(d2);
+            return d2;
+          })();
+          hd.innerHTML = "";
+          try { window.__pfAccVis = ABCJS.renderAbc(hd, buildSingle(opp), opts)[0]; } catch (e2) {}
+        }
+        const title = lastTitle.length > 30 ? lastTitle.slice(0, 29) + "\u2026" : lastTitle;
+        el("pfinfo").textContent = (title ? title + "\u00a0\u00a0\u00b7\u00a0\u00a0" : "") +
+          "Bars " + slice[0].n + "\u2013" + slice[slice.length - 1].n +
+          "  \u00b7  " + (pfPage + 1) + "/" + Math.ceil(bars.length / PF_WIN) + "  \u00b7  B22";
+      } catch (inner) {
+        el("pfinfo").textContent = "Render error: " + inner.message;
+      }
+    })();
+  } catch (e) {
+    el("pfinfo").textContent = "Render error: " + e.message;
+  }
+}
+
+function pfMove(delta) {
+  stopPlay();
+  const max = Math.ceil(bars.length / PF_WIN);
+  pfPage = Math.min(max - 1, Math.max(0, pfPage + delta));
+  pfRender();
+}
+
+function pfEnter(ev) {
+  if (ev) ev.stopPropagation();
+  if (!lastText) { status("Load a file first.", true); return; }
+  parseBars(lastText);
+  if (!bars.length) { status("No % bar comments in this file.", true); return; }
+  el("pfsize").value = "2";   // zoom slider is hidden for now; 2.0 = exact fit
+  el("pf").classList.add("on");
+  try {
+    document.documentElement.requestFullscreen().then(() => {
+      window.screen.orientation.lock("landscape").catch(() => {});
+    }).catch(() => {});
+  } catch (e) {}
+  pfPage = 0;
+  pfVoice = "RH";                    // always start practice on RH, label in sync
+  el("pfvoice").textContent = "RH";
+  pfRender();
+}
+
+function pfExit() {
+  stopPlay();
+  el("pf").classList.remove("on");
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+}
+
+// ---------- piano link: Web MIDI input + follow scoring (colorless) ----------
+// Phases: connect (Web MIDI), duet (▶ plays the opposite staff), auto-advance
+// (window flips when its pitch classes are played), tally (✓ on labels).
+// Feedback is text/tick only by design (achromatopsia — no color coding).
+let midiAccess = null, midiInput = null, midiWanted = false;
+let pfFollow = { required: [], played: new Set(), misses: 0, done: false };
+const LETTER_SEMIS = {0: 0, 1: 2, 2: 4, 3: 5, 4: 7, 5: 9, 6: 11};
+const ACC_SEMIS = {"^": 1, "__": -2, "^^": 2, "_": -1, "=": 0};
+function pianoToggle() {
+  if (midiInput || midiWanted) {   // disconnect
+    midiWanted = false;
+    if (midiInput) {
+      try { midiInput.onmidimessage = null; } catch (e) {}
+      midiInput = null;
+    }
+    midiAccess = null;
+    el("pfmidi").textContent = "MIDI";
+    el("pfmidi").classList.remove("playing");
+    stopPlay();
+    return;
+  }
+  if (!navigator.requestMIDIAccess) { status("Web MIDI not available (use Chrome).", true); return; }
+  midiWanted = true;
+  status("Requesting MIDI access\u2026");
+  navigator.requestMIDIAccess({ sysex: false }).then(access => {
+    midiAccess = access;
+    const pick = () => {
+      const inputs = Array.from(access.inputs.values());
+      if (!inputs.length) { status("No MIDI device found.", true); return null; }
+      let best = inputs.find(i => /p-?(85|105)|yamaha|piano|digital/i.test(i.name)) || inputs[0];
+      return best;
+    };
+    const chosen = pick();
+    if (!chosen) { midiWanted = false; return; }
+    hookMidiInput(chosen);
+    access.onstatechange = () => {
+      if (!midiWanted) return;
+      const cur = Array.from(access.inputs.values()).find(i => i.connection === "open") || pick();
+      if (cur && !midiInput) hookMidiInput(cur);
+      if (!cur && midiInput) { status("Piano disconnected.", true); disconnectQuiet(); }
+    };
+  }).catch(e => { midiWanted = false; status("MIDI access denied: " + e.message, true); });
+}
+function disconnectQuiet() {
+  if (midiInput) { try { midiInput.onmidimessage = null; } catch (e) {} midiInput = null; }
+  el("pfmidi").textContent = "MIDI";
+  el("pfmidi").classList.remove("playing");
+}
+function shortName(n) { return (n || "MIDI").replace(/\s+/g, " ").trim().slice(0, 8); }
+function hookMidiInput(inp) {
+  midiInput = inp;
+  try { inp.open(); } catch (e) {}
+  inp.onmidimessage = (ev) => {
+    const d = ev.data;               // [status, note, vel]
+    if (!d || d.length < 2) return;
+    const cmd = d[0] & 0xf0;
+    if (cmd === 0x90 && d[2] > 0) onPianoNote(d[1], true);
+    else if (cmd === 0x80 || (cmd === 0x90 && d[2] === 0)) onPianoNote(d[1], false);
+  };
+  el("pfmidi").textContent = shortName(inp.name);
+  el("pfmidi").classList.add("playing");
+  status("");
+  if (window.__pfVis && !window.__pfFollowOn) {
+    window.__pfFollowOn = true;
+    pfFollow = { required: computeRequired(window.__pfVis), played: new Set(), misses: 0, done: false };
+    window.__pfInfoBase = el("pfinfo").textContent;
+  }
+}
+// scoring hooks are exported for headless validation; real events feed the same path
+window.__onPianoNote = onPianoNote;
+function onPianoNote(midi, on) {
+  if (!on) return;
+  if (!el("pf").classList.contains("on")) return;
+  const cls = ((midi % 12) + 12) % 12;
+  if (window.__pfFollowOn) followNote(cls);
+}
+function computeRequired(vis) {
+  const req = new Set();
+  try {
+    for (const line of vis[0].lines) {
+      if (!line.staff) continue;
+      for (const staff of line.staff) {
+        for (const voice of staff.voices) {
+          for (const ev of voice) {
+            if (ev.grace || ev.graceNotes) continue;
+            for (const p of ev.pitches || []) {
+              const idx = ((p.pitch % 7) + 7) % 7;
+              let semi = LETTER_SEMIS[idx];
+              if (p.accidental && ACC_SEMIS[p.accidental] !== undefined) semi += ACC_SEMIS[p.accidental];
+              else if (p.name && p.name.includes("\u266f")) semi += 1;
+              else if (p.name && p.name.includes("\u266d")) semi -= 1;
+              req.add(((semi % 12) + 12) % 12);
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {}
+  return Array.from(req);
+}
+function followNote(cls) {
+  const f = window.__pfFollowOn ? pfFollow : null;
+  if (!f || f.done) return;
+  if (f.required.includes(cls)) {
+    if (!f.played.has(cls)) {
+      f.played.add(cls);
+      stampTicks(cls);
+      const done = f.played.size >= f.required.length;
+      const base = window.__pfInfoBase || el("pfinfo").textContent;
+      el("pfinfo").textContent = base + (done ? "\u00a0\u00a0\u2713 done" :
+        "\u00a0\u00a0\u2713" + f.played.size + "/" + f.required.length +
+        (f.misses ? "\u00a0!" + f.misses : ""));
+      if (done) {
+        f.done = true;
+        if (el("pfauto").classList.contains("playing")) {
+          setTimeout(() => { if (window.__pfFollowOn) pfMove(1); }, 600);
+        }
+      }
+    }
+  } else if (f.played.size < f.required.length) {
+    f.misses++;
+    const base = window.__pfInfoBase || el("pfinfo").textContent;
+    el("pfinfo").textContent = base + "\u00a0\u00a0\u2713" + f.played.size + "/" + f.required.length +
+      "\u00a0\u00a0!" + f.misses;
+  }
+}
+// tick every label whose letter class matches the played pitch class
+function stampTicks(cls) {
+  const nameChar = {0: "C", 2: "D", 4: "E", 5: "F", 7: "G", 9: "A", 11: "B"}[cls];
+  if (!nameChar) return;
+  document.querySelectorAll("#pfbox svg text").forEach(t => {
+    if ((t.textContent || "").startsWith("=") || (t.textContent || "").includes("\u2713")) return;
+    const first = (t.textContent || "").trim()[0];
+    if (first === nameChar) t.textContent = t.textContent + " \u2713";
+  });
+}
+
+// ---------- wiring ----------
+el("file").addEventListener("change", loadFile);
+el("names").addEventListener("change", () => { if (lastText) render(lastText); });
+el("size").addEventListener("input", () => {
+  el("sizeval").textContent = parseFloat(el("size").value).toFixed(1) + "\u00d7";
+});
+el("size").addEventListener("change", () => { if (lastText) render(lastText); });
+el("practice").addEventListener("click", (ev) => {
+  ev.stopPropagation();   // the click must not bubble into the paging handler,
+                         // which treated a right-half button click as "next measure"
+  pfEnter(ev);
+});
+el("pfsize").addEventListener("input", () => {
+  el("pfsizeval").textContent = parseFloat(el("pfsize").value).toFixed(1) + "\u00d7";
+});
+el("pfsize").addEventListener("change", pfRender);
+el("pfwin").addEventListener("change", () => {
+  const firstBar = pfPage * PF_WIN;
+  PF_WIN = Math.max(1, Math.min(3, parseInt(el("pfwin").value) || 1));
+  const lastWin = Math.max(0, Math.ceil(bars.length / PF_WIN) - 1);
+  pfPage = Math.min(Math.floor(firstBar / PF_WIN), lastWin);
+  pfRender();
+});
+el("pfvoice").addEventListener("click", () => {
+  pfVoice = pfVoice === "RH" ? "LH" : (pfVoice === "LH" ? "BOTH" : "RH");
+  el("pfvoice").textContent = pfVoice;
+  pfRender();
+});
+// re-render on release only (input event just updates the label to avoid double render)
+let pfDown = null;
+addEventListener("pointerdown", (ev) => {
+  if (!el("pf").classList.contains("on")) return;
+  pfDown = {x: ev.clientX, y: ev.clientY,
+    boxes: Array.from(document.querySelectorAll("#pfbox")).map(b2 => ({el: b2, sl: b2.scrollLeft, st: b2.scrollTop})),
+    moved: false};
+});
+addEventListener("pointermove", (ev) => {
+  if (!pfDown) return;
+  const dx = ev.clientX - pfDown.x, dy = ev.clientY - pfDown.y;
+  if (!pfDown.moved && Math.abs(dx) + Math.abs(dy) > 12) pfDown.moved = true;
+  if (pfDown.moved) pfDown.boxes.forEach(o => { o.el.scrollLeft = o.sl - dx; o.el.scrollTop = o.st - dy; });
+});
+addEventListener("pointerup", () => { setTimeout(() => { pfDown = null; }, 60); });
+addEventListener("click", (ev) => {
+  if (!el("pf").classList.contains("on")) return;   // practice overlay only
+  if (ev.target.closest("#pfexit")) { pfExit(); return; }
+  if (ev.target.closest("#pfvoice")) return;   // its own click handler manages the cycle
+  if (ev.target.closest("#pfbar")) return;     // slider interaction must not page
+  // drags/scrolls must not page: page only on a stationary tap
+  if (pfDown && Math.hypot(ev.clientX - pfDown.x, ev.clientY - pfDown.y) > 12) { pfDown = null; return; }
+  pfDown = null;
+  const w = window.innerWidth;
+  if (ev.clientX < w * 0.35) pfMove(-1);
+  else if (ev.clientX > w * 0.65) pfMove(1);
+});
+window.addEventListener("keydown", (e) => {
+  if (!el("pf").classList.contains("on")) return;
+  if (e.key === "ArrowRight") pfMove(1);
+  else if (e.key === "ArrowLeft") pfMove(-1);
+  else if (e.key === "Escape" || e.key === "End") pfExit();
+});
+window.addEventListener("resize", () => { if (el("pf").classList.contains("on")) pfRender(); });
+
+// ---------- playback (abcjs synth, local soundfont) ----------
+let liveSynth = null;
+const SF_URL = "/sf/FluidR3_GM/";
+const TRI = '<svg viewBox="0 0 10 12" class="tri"><path d="M1 1 L9 6 L1 11 Z"/></svg>';
+const SQ  = '<svg viewBox="0 0 10 12" class="tri"><rect x="2" y="2" width="7" height="8"/></svg>';
+function setPlayBtn(on) {
+  el("pfplay").innerHTML = on ? SQ : TRI;
+  el("pfplay").classList.toggle("playing", on);
+  const mb = el("playbtn");
+  mb.innerHTML = on ? SQ : TRI;
+  mb.classList.toggle("playing", on);
+}
+function stopPlay() {
+  if (liveSynth) {
+    try { liveSynth.stop(); } catch (e) {}
+    liveSynth = null;
+  }
+  setPlayBtn(false);
+}
+function togglePlay(visualObj) {
+  if (liveSynth) { stopPlay(); return; }
+  if (!visualObj) return;
+  const synth = new ABCJS.synth.CreateSynth();
+  status("Loading sounds\u2026");
+  synth.init({ visualObj: visualObj, options: { soundFontUrl: SF_URL } })
+    .then(() => synth.prime())
+    .then(() => { liveSynth = synth; setPlayBtn(true); status(""); synth.start(); })
+    .catch(e => { status("Audio: " + e.message, true); setPlayBtn(false); });
+}
+window.addEventListener("DOMContentLoaded", () => {
+  const themeSel = el("theme");
+  const savedTheme = localStorage.getItem("scorelens-theme") || "light";
+  themeSel.value = savedTheme;
+  document.documentElement.dataset.theme = savedTheme;
+  themeSel.addEventListener("change", () => {
+    document.documentElement.dataset.theme = themeSel.value;
+    localStorage.setItem("scorelens-theme", themeSel.value);
+  });
+  el("playbtn").addEventListener("click", () => {
+    const dbg = window.__scorelensDebug;
+    togglePlay(dbg && dbg.vis ? dbg.vis[0] : null);
+  });
+  el("pfplay").addEventListener("click", () => {
+    if (midiInput && pfVoice !== "BOTH") {
+      // duet: the synth plays the staff you are NOT reading
+      togglePlay(window.__pfAccVis || null);
+      return;
+    }
+    togglePlay(window.__pfVis ? window.__pfVis[0] : null);
+  });
+  el("pfmidi").addEventListener("click", pianoToggle);
+  el("pfauto").addEventListener("click", () => {
+    el("pfauto").classList.toggle("playing");
+  });
+  const last = localStorage.getItem("scorelens-last");
+  loadList().then(() => {
+    if (last) for (const o of el("file").options) if (o.value === last) { el("file").value = last; break; }
+    loadFile();
+  });
+});
+</script>
+</body>
+</html>

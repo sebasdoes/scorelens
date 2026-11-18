@@ -1,0 +1,18 @@
+# Proprietary sheet music. Keep out of the repo.
+files/
+
+# Local scratch. Nothing here survives a restart by design.
+cache/
+
+# Runtime logs
+*.log
+log/
+logs/
+
+# OS junk
+.DS_Store
+desktop.ini
+
+# Editor junk
+*.swp
+*~
