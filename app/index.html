@@ -412,6 +412,10 @@ function stampNames(vis, rootSel, laneGap) {
       }
       // zip heads to events per staff in walk order; chords consume `count`
       // heads, label centered on their mean x, y = uniform lane per staff
+      // heads sorted by x: grace heads are APPENDED after their main note in
+      // the DOM but sit LEFT of it — without the sort labels (and fades) swap
+      // grace/main ("B to C#" reads C#B)
+      for (let s = 0; s < chunk; s++) perStaffHeads[s].sort((p, q) => p.bb.x - q.bb.x);
       for (let s = 0; s < chunk; s++) {
         const events = sysEvents[s] || [];
         const heads = perStaffHeads[s];
@@ -776,6 +780,16 @@ function stats(f) {
 // slot machine: events sorted by onset beat, grouped into simultaneous slots.
 // single-voice windows degenerate to one ordered sequence; BOTH view enforces
 // cross-hand temporal alignment (order free within a slot, strict between).
+// heads in WALK order (per svg/system, x-sorted inside): grace heads are
+// appended after their main note in the DOM but sit left of it — a plain
+// DOM-order list swaps grace/main for both labels and fades
+function headsInWalkOrder() {
+  return Array.from(document.querySelectorAll("#pfbox svg")).flatMap(svg =>
+    Array.from(svg.querySelectorAll(".abcjs-notehead"))
+      .map(h2 => ({ h2, x: h2.getBBox().x }))
+      .sort((p, q) => p.x - q.x)
+      .map(o2 => o2.h2));
+}
 function buildSlots(col) {
   const evs = col.order.slice();
   evs.sort((a2, b2) => a2.beat - b2.beat || (a2.v || 0) - (b2.v || 0));
@@ -790,7 +804,7 @@ function buildSlots(col) {
 function buildFollow(col) {
   return { slots: buildSlots(col), si: 0, tolerated: col.tolerated, ignored: col.ignored || [],
            misses: 0, done: false,
-           heads: Array.from(document.querySelectorAll("#pfbox svg .abcjs-notehead")) };
+           heads: headsInWalkOrder() };
 }
 // scoring hooks are exported for headless validation; real events feed the same path
 window.__onPianoNote = onPianoNote;
