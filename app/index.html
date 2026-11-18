@@ -101,7 +101,7 @@
 
   <div id="pf">
     <div id="pfinfo"></div>
-    <div id="pfbar"><button id="pfplay" type="button"><svg viewBox="0 0 10 12" class="tri"><path d="M1 1 L9 6 L1 11 Z"/></svg></button><button id="pfvoice" type="button">RH</button><button id="pfmidi" type="button">MIDI</button><button id="pfauto" type="button">Auto</button><label id="pfwinlabel">Bars <input id="pfwin" type="range" min="1" max="3" step="1" value="1"></label><label class="pfzoom" style="margin-left:8px">Size: <input type="range" id="pfsize" min="1" max="4" step="0.1" value="2"> <span id="pfsizeval">2.0&times;</span></label></div>
+    <div id="pfbar"><button id="pfplay" type="button"><svg viewBox="0 0 10 12" class="tri"><path d="M1 1 L9 6 L1 11 Z"/></svg></button><button id="pfvoice" type="button">RH</button><button id="pfmidi" type="button">MIDI</button><button id="pfauto" type="button">Auto</button><button id="pfstrict" type="button">Strict</button><label id="pfwinlabel">Bars <input id="pfwin" type="range" min="1" max="3" step="1" value="1"></label><label class="pfzoom" style="margin-left:8px">Size: <input type="range" id="pfsize" min="1" max="4" step="0.1" value="2"> <span id="pfsizeval">2.0&times;</span></label></div>
     <button id="pfexit" type="button">&#10005;</button>
     <span id="pftoast"></span>
     <div id="pfpaper"></div>
@@ -183,10 +183,21 @@ async function loadFile() {
 // letter this bar, else the key signature.
 // Returns an array indexed BY SYSTEM, each = array per staff of
 // {name, count} events (chords as one entry with `count` heads).
-function computeEvents(tune, collector) {
+function computeEvents(tune, collector, tieToks, tieSeed) {
   const out = [];
   let headIdx = 0;   // global draw order of note heads == DOM order of .abcjs-notehead
   const eventsOut = collector ? collector.order : null;
+  const ignoredOut = collector ? collector.ignored : null;
+  const beats = {};          // per staff+voice: onset in whole-note units
+  const cursors = {};        // per staff+voice: token cursor into tieToks
+  const pitchId = (p2) => {
+    const o2 = Math.floor(p2.pitch / 7);
+    return "CDEFGAB"[((p2.pitch % 7) + 7) % 7] +
+      (o2 > 0 ? "'".repeat(o2) : "") + (o2 < 0 ? ",".repeat(-o2) : "");
+  };
+  const fadeInto = (start2, count2, evt) => {   // extend earlier tie-start's fade range
+    if (evt) (evt.contH = evt.contH || []).push([start2, count2]);
+  };
   // collector (optional): ordered required events for the piano link.
   // midis are octave-strict; grace notes are tolerated, never required.
   const midiOf = (p) => {
@@ -222,9 +233,22 @@ function computeEvents(tune, collector) {
         keyAcc = {};
         for (const a of staff.key.accidentals) keyAcc[a.note.toUpperCase()] = a.acc;
       }
-      for (const voice of staff.voices) {
+      for (let vi = 0; vi < staff.voices.length; vi++) {
+        const voice = staff.voices[vi];
+        const vkey = si + ":" + vi;
+        beats[vkey] = 0;
+        const toks = tieToks && tieToks[si] ? tieToks[si] : null;
+        let ti = 0, prevTie = null, lastEvt = null;
+        if (tieSeed && tieSeed[si]) prevTie = tieSeed[si];   // tie reaching into this window
         for (const ev of voice) {
           if (ev.el_type === "bar") { barAcc = {}; continue; }
+          if (ev.el_type === "rest") {
+            beats[vkey] += ev.duration || 0;
+            prevTie = null;
+            lastEvt = null;
+            if (toks) ti++;
+            continue;
+          }
           if (ev.gracenotes && ev.gracenotes.length) {
             for (const gi of ev.gracenotes) {
               if (gi.name || gi.pitch !== undefined) {
@@ -238,9 +262,36 @@ function computeEvents(tune, collector) {
           if (ev.el_type !== "note" || !ev.pitches) continue;
           const label = ev.pitches.map(headName).join("\u2009");
           outStaff.push({ name: label, count: ev.pitches.length });
-          if (eventsOut) eventsOut.push({ midis: ev.pitches.map(midiOf), label: label, got: [], ticked: false,
-                                          v: si, hStart: headIdx, hCount: ev.pitches.length });
-          headIdx += ev.pitches.length;
+          const tok = toks ? (toks[ti] || null) : null;
+          ti++;
+          const ids = ev.pitches.map(pitchId);
+          // tieFrom: pitches whose PREVIOUS event token marked tied (held, not struck again)
+          let tieFrom = null;
+          if (tok && prevTie && ids.length === prevTie.ids.length && ids.every(i2 => prevTie.ids.includes(i2)))
+            tieFrom = new Set(prevTie.tieOut);
+          else if (!tok && prevTie)
+            tieFrom = new Set(prevTie.tieOut);   // untokenized element: assume continuation of prev
+          prevTie = tok || null;
+          const held = tieFrom ? ev.pitches.filter((p2, pi) => tieFrom.has(ids[pi])) : [];
+          const req = tieFrom ? ev.pitches.filter((p2, pi) => !tieFrom.has(ids[pi])) : ev.pitches;
+          if (!req.length) {
+            // whole event is a hold: fade with the tie start, never required again
+            fadeInto(headIdx, ev.pitches.length, lastEvt);
+            if (ignoredOut) for (const p2 of held)
+              ignoredOut.push({ midi: midiOf(p2), h: headIdx + held.indexOf(p2) });
+            headIdx += ev.pitches.length;
+          } else if (eventsOut) {
+            lastEvt = { midis: req.map(midiOf), label: label, got: [], ticked: false,
+                        v: si, hStart: headIdx, hCount: ev.pitches.length,
+                        beat: beats[vkey] };
+            eventsOut.push(lastEvt);
+            if (ignoredOut) for (const p2 of held)
+              ignoredOut.push({ midi: midiOf(p2), h: headIdx + ev.pitches.indexOf(p2) });
+            headIdx += ev.pitches.length;
+          } else {
+            headIdx += ev.pitches.length;
+          }
+          beats[vkey] += ev.duration || 0;
         }
       }
     }
@@ -430,6 +481,46 @@ function stripStructure(line) {
   return s;
 }
 
+// --- ABC-source tie markers ------------------------------------------------
+// The parse drops tie info (no startTie/endTie flags); tied continuations must
+// NOT be required again (they are held, only struck once). Tokenize the exact
+// fragment text: one entry per note/rest element, in parse order, each with the
+// set of pitch ids (letter+octave) whose token carried a tie marker.
+function voiceTieTokens(text) {
+  const out = [];
+  for (const line of text.split("\n")) {
+    if (/^(M|L|K|Q|V|%%|w:)/.test(line)) continue;
+    for (let tok of line.split(/\s+/)) {
+      if (!tok) continue;
+      tok = tok.replace(/![^!]*!/g, "");            // !decoration!
+      if (/^\{/.test(tok)) {                        // grace group
+        const rest2 = tok.replace(/\{[^}]*\}/, "");
+        if (!rest2) continue;
+        tok = rest2;
+      }
+      tok = tok.replace(/[|:]+$/, "");              // trailing barline chars only
+      if (!tok || tok === "-") continue;
+      const pitches = [];
+      const cm = tok.match(/^\[([^\]]+)\]/);
+      if (cm) {
+        const re = /(\^+|_+|=)?([A-Ga-g])([,']*)(-?)/g;
+        let mm;
+        while ((mm = re.exec(cm[1])))
+          pitches.push({ id: mm[2].toUpperCase() + (mm[3] || ""), tied: mm[4] === "-" });
+        const after = tok.slice(cm[0].length).replace(/[\d\/.]+$/, "");
+        if (after === "-") pitches.forEach(p2 => p2.tied = true);
+      } else {
+        const mm = tok.match(/^(\^+|_+|=)?([A-Ga-g])([,']*)[\d\/.]*(-?)$/);
+        if (mm) pitches.push({ id: mm[2].toUpperCase() + (mm[3] || ""), tied: mm[4] === "-" });
+      }
+      if (pitches.length)
+        out.push({ ids: pitches.map(p2 => p2.id),
+                   tieOut: pitches.filter(p2 => p2.tied).map(p2 => p2.id) });
+    }
+  }
+  return out;
+}
+
 function pfRender() {
   stopPlay();
   const startIdx = Math.min(pfPage * PF_WIN, Math.floor((bars.length - 1) / PF_WIN) * PF_WIN);
@@ -528,17 +619,25 @@ function pfRender() {
         boxes().forEach(fitSvgIn);
         
         window.__pfVis = vis;
-        // follow scoring: required pitch classes of the DISPLAYED voice(s)
+        // follow scoring: required (tie-merged, beat-slotted) events of the DISPLAYED voice(s)
         window.__pfFollowOn = !!midiInput;
-        const col = { order: [], tolerated: [] };
-        computeEvents(vis[0], col);
-        const voices = {};
-        col.order.forEach(e2 => {
-          const vkey = e2.v || "0";
-          (voices[vkey] = voices[vkey] || { events: [], i: 0 }).events.push(e2);
-        });
-        pfFollow = { voices: voices, tolerated: col.tolerated, misses: 0, done: false,
-                     heads: Array.from(document.querySelectorAll("#pfbox svg .abcjs-notehead")) };
+        const col = { order: [], tolerated: [], ignored: [] };
+        const voices2 = pfVoice === "BOTH" ? ["V:1", "V:2"] : [pfVoice === "RH" ? "V:1" : "V:2"];
+        const prevBar = slice[0].n > 1 ? bars[slice[0].n - 2] : null;
+        const tieToks = [], tieSeed = [];
+        for (const v2 of voices2) {
+          tieToks.push(voiceTieTokens(collect(v2).join("\n")));
+          let seed = null;
+          if (prevBar) {
+            const pl = prevBar.lines.filter(l2 => l2.startsWith("[" + v2 + "]")).join(" ");
+            const pt2 = voiceTieTokens(stripStructure(pl) || "");
+            const last2 = pt2.length ? pt2[pt2.length - 1] : null;
+            if (last2 && last2.tieOut.length) seed = last2;
+          }
+          tieSeed.push(seed);
+        }
+        computeEvents(vis[0], col, tieToks, tieSeed);
+        pfFollow = buildFollow(col);
         if (window.__pfFollowOn) window.__pfInfoBase = el("pfinfo").textContent;
         // duet: pre-render the opposite voice for the accompanist
         window.__pfAccVis = null;
@@ -602,7 +701,7 @@ function pfExit() {
 // (window flips when its pitch classes are played), tally (✓ on labels).
 // Feedback is text/tick only by design (achromatopsia — no color coding).
 let midiAccess = null, midiInput = null, midiWanted = false;
-let pfFollow = { voices: {}, tolerated: [], misses: 0, done: false };
+let pfFollow = { slots: [], si: 0, tolerated: [], ignored: [], misses: 0, done: false };
 const LETTER_SEMIS = {0: 0, 1: 2, 2: 4, 3: 5, 4: 7, 5: 9, 6: 11};
 const ACC_SEMIS = {"^": 1, "__": -2, "^^": 2, "_": -1, "=": 0};
 const ACC_WORD = { flat: -1, sharp: 1, natural: 0, dble_flat: -2, dble_sharp: 2,
@@ -663,17 +762,35 @@ function hookMidiInput(inp) {
   status("");
   if (window.__pfVis && !window.__pfFollowOn) {
     window.__pfFollowOn = true;
-    const col2 = { order: [], tolerated: [] };
+    const col2 = { order: [], tolerated: [], ignored: [] };
     computeEvents(window.__pfVis[0], col2);
-    const voices2 = {};
-    col2.order.forEach(e2 => {
-      const vkey = e2.v || "0";
-      (voices2[vkey] = voices2[vkey] || { events: [], i: 0 }).events.push(e2);
-    });
-    pfFollow = { voices: voices2, tolerated: col2.tolerated, misses: 0, done: false,
-                 heads: Array.from(document.querySelectorAll("#pfbox svg .abcjs-notehead")) };
+    pfFollow = buildFollow(col2);
     window.__pfInfoBase = el("pfinfo").textContent;
   }
+}
+function stats(f) {
+  const total = f.slots.reduce((a3, s2) => a3 + s2.evs.length, 0);
+  const done = f.slots.reduce((a3, s2) => a3 + s2.evs.filter(e3 => e3.ticked).length, 0);
+  return [done, total];
+}
+// slot machine: events sorted by onset beat, grouped into simultaneous slots.
+// single-voice windows degenerate to one ordered sequence; BOTH view enforces
+// cross-hand temporal alignment (order free within a slot, strict between).
+function buildSlots(col) {
+  const evs = col.order.slice();
+  evs.sort((a2, b2) => a2.beat - b2.beat || (a2.v || 0) - (b2.v || 0));
+  const slots = [];
+  for (const e2 of evs) {
+    const s2 = slots.length ? slots[slots.length - 1] : null;
+    if (s2 && Math.abs(s2.beat - e2.beat) < 1e-3) s2.evs.push(e2);
+    else slots.push({ beat: e2.beat, evs: [e2] });
+  }
+  return slots;
+}
+function buildFollow(col) {
+  return { slots: buildSlots(col), si: 0, tolerated: col.tolerated, ignored: col.ignored || [],
+           misses: 0, done: false,
+           heads: Array.from(document.querySelectorAll("#pfbox svg .abcjs-notehead")) };
 }
 // scoring hooks are exported for headless validation; real events feed the same path
 window.__onPianoNote = onPianoNote;
@@ -687,48 +804,56 @@ function onPianoNote(midi, on) {
 function followNote(midi) {
   const f = window.__pfFollowOn ? pfFollow : null;
   if (!f) return;
-  // grace notes fade whenever played, even after the measure is done
-  const grace = f.tolerated.find(t2 => t2.midi === midi);
-  if (grace) {
-    if (f.heads[grace.h]) f.heads[grace.h].style.opacity = 0.25;
+  const pass = f.tolerated.concat(f.ignored).find(t2 => t2.midi === midi);
+  if (f.done) {   // after the measure: only graces/held pitches still fade
+    if (pass && f.heads[pass.h]) f.heads[pass.h].style.opacity = 0.25;
     return;
   }
-  if (f.done) return;
   const base = window.__pfInfoBase || el("pfinfo").textContent;
-  // per-hand pointers: each hand (voice staff) has its own ordered sequence;
-  // a played note matches whichever hand's CURRENT chord/note contains it.
-  for (const v of Object.keys(f.voices)) {
-    const st = f.voices[v];
-    if (st.i >= st.events.length) continue;
-    const cur = st.events[st.i];
-    if (!cur.midis.includes(midi)) continue;
-    if (!cur.got.includes(midi)) cur.got.push(midi);
-    if (cur.got.length >= cur.midis.length) {
-      cur.ticked = true;
-      for (let h2 = cur.hStart; h2 < cur.hStart + cur.hCount; h2++) {
-        if (f.heads[h2]) f.heads[h2].style.opacity = 0.25;
-      }
-      st.i++;
+  // 1) the current slot's requirements win over anything tolerated
+  const slot = f.slots[f.si];
+  const ev = slot ? slot.evs.find(cur => !cur.ticked && cur.midis.includes(midi)) : null;
+  if (ev) {
+    if (!ev.got.includes(midi)) ev.got.push(midi);
+    if (ev.got.length >= ev.midis.length) {
+      ev.ticked = true;
+      // fade this event's heads plus any tied-continuation heads it absorbed
+      const ranges = [[ev.hStart, ev.hCount]].concat(ev.contH || []);
+      for (const r2 of ranges)
+        for (let h2 = r2[0]; h2 < r2[0] + r2[1]; h2++)
+          if (f.heads[h2]) f.heads[h2].style.opacity = 0.25;
     }
-    const doneEvts = Object.keys(f.voices)
-      .reduce((a2, v2) => a2 + f.voices[v2].events.filter(e3 => e3.ticked).length, 0);
-    const total = Object.keys(f.voices).reduce((a2, v2) => a2 + f.voices[v2].events.length, 0);
-    el("pfinfo").textContent = base + "\u00a0\u00a0\u2713" + doneEvts + "/" + total;
-    if (doneEvts >= total) {
+    const d2 = stats(f);
+    if (slot.evs.every(e3 => e3.ticked)) f.si++;
+    if (f.si >= f.slots.length && f.slots.every(s2 => s2.evs.every(e3 => e3.ticked))) {
       f.done = true;
       el("pfinfo").textContent = base + "\u00a0\u00a0\u2713 done";
       if (el("pfauto").classList.contains("playing")) {
         setTimeout(() => { if (window.__pfFollowOn) pfMove(1); }, 220);
       }
+    } else {
+      el("pfinfo").textContent = base + "\u00a0\u00a0\u2713" + d2[0] + "/" + d2[1];
     }
     return;
   }
+  // 2) grace notes and held (tied-over) pitches: fade their head, never a miss
+  if (pass) {
+    if (f.heads[pass.h]) f.heads[pass.h].style.opacity = 0.25;
+    return;
+  }
+  // 3) miss
+  const strict = el("pfstrict").classList.contains("playing");
   f.misses++;
-  const doneEvts = Object.keys(f.voices)
-    .reduce((a2, v2) => a2 + f.voices[v2].events.filter(e3 => e3.ticked).length, 0);
-  const total = Object.keys(f.voices).reduce((a2, v2) => a2 + f.voices[v2].events.length, 0);
-  el("pfinfo").textContent = base + "\u00a0\u00a0\u2713" + doneEvts + "/" + total +
-    "\u00a0\u00a0!" + f.misses;
+  if (strict) {
+    f.slots.forEach(s2 => s2.evs.forEach(e3 => { e3.got = []; e3.ticked = false; }));
+    f.si = 0;
+    f.heads.forEach(h2 => h2.style.opacity = "");
+    f.misses = 0;
+    el("pfinfo").textContent = base + "\u00a0\u00a0\u21ba reset";
+    return;
+  }
+  const d2 = stats(f);
+  el("pfinfo").textContent = base + "\u00a0\u00a0\u2713" + d2[0] + "/" + d2[1] + "\u00a0\u00a0!" + f.misses;
 }
 let liveSynth = null;
 const SF_URL = "/sf/FluidR3_GM/";
@@ -780,6 +905,9 @@ window.addEventListener("DOMContentLoaded", () => {
   el("pfmidi").addEventListener("click", pianoToggle);
   el("pfauto").addEventListener("click", () => {
     el("pfauto").classList.toggle("playing");
+  });
+  el("pfstrict").addEventListener("click", () => {
+    el("pfstrict").classList.toggle("playing");
   });
   el("file").addEventListener("change", loadFile);
   el("names").addEventListener("change", () => { if (lastText) render(lastText); });
