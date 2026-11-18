@@ -236,7 +236,8 @@ function computeEvents(tune, collector) {
           if (ev.el_type !== "note" || !ev.pitches) continue;
           const label = ev.pitches.map(headName).join("\u2009");
           outStaff.push({ name: label, count: ev.pitches.length });
-          if (eventsOut) eventsOut.push({ midis: ev.pitches.map(midiOf), label: label, got: [], ticked: false });
+          if (eventsOut) eventsOut.push({ midis: ev.pitches.map(midiOf), label: label, got: [], ticked: false,
+                                          v: si });
         }
       }
     }
@@ -528,7 +529,12 @@ function pfRender() {
         window.__pfFollowOn = !!midiInput;
         const col = { order: [], tolerated: [] };
         computeEvents(vis[0], col);
-        pfFollow = { order: col.order, tolerated: col.tolerated, i: 0, misses: 0, done: false };
+        const voices = {};
+        col.order.forEach(e2 => {
+          const vkey = e2.v || "0";
+          (voices[vkey] = voices[vkey] || { events: [], i: 0 }).events.push(e2);
+        });
+        pfFollow = { voices: voices, tolerated: col.tolerated, misses: 0, done: false };
         if (window.__pfFollowOn) window.__pfInfoBase = el("pfinfo").textContent;
         // duet: pre-render the opposite voice for the accompanist
         window.__pfAccVis = null;
@@ -592,7 +598,7 @@ function pfExit() {
 // (window flips when its pitch classes are played), tally (✓ on labels).
 // Feedback is text/tick only by design (achromatopsia — no color coding).
 let midiAccess = null, midiInput = null, midiWanted = false;
-let pfFollow = { order: [], tolerated: [], i: 0, misses: 0, done: false };
+let pfFollow = { voices: {}, tolerated: [], misses: 0, done: false };
 const LETTER_SEMIS = {0: 0, 1: 2, 2: 4, 3: 5, 4: 7, 5: 9, 6: 11};
 const ACC_SEMIS = {"^": 1, "__": -2, "^^": 2, "_": -1, "=": 0};
 const ACC_WORD = { flat: -1, sharp: 1, natural: 0, dble_flat: -2, dble_sharp: 2,
@@ -655,7 +661,12 @@ function hookMidiInput(inp) {
     window.__pfFollowOn = true;
     const col2 = { order: [], tolerated: [] };
     computeEvents(window.__pfVis[0], col2);
-    pfFollow = { order: col2.order, tolerated: col2.tolerated, i: 0, misses: 0, done: false };
+    const voices2 = {};
+    col2.order.forEach(e2 => {
+      const vkey = e2.v || "0";
+      (voices2[vkey] = voices2[vkey] || { events: [], i: 0 }).events.push(e2);
+    });
+    pfFollow = { voices: voices2, tolerated: col2.tolerated, misses: 0, done: false };
     window.__pfInfoBase = el("pfinfo").textContent;
   }
 }
@@ -671,32 +682,40 @@ function onPianoNote(midi, on) {
 function followNote(midi) {
   const f = window.__pfFollowOn ? pfFollow : null;
   if (!f || f.done) return;
-  const cur = f.order[f.i];
-  if (!cur) return;
   const base = window.__pfInfoBase || el("pfinfo").textContent;
-  if (!cur.midis.includes(midi)) {
-    if (f.tolerated.includes(midi)) return;   // grace notes are never a miss
-    f.misses++;
-    el("pfinfo").textContent = base + "\u00a0\u00a0\u2713" + f.i + "/" + f.order.length +
-      "\u00a0\u00a0!" + f.misses;
-    return;
-  }
-  if (!cur.got.includes(midi)) {
-    cur.got.push(midi);
-    tickLabelByExact(cur.label);
-  }
-  if (cur.got.length >= cur.midis.length) {
-    f.i++;
-    if (f.i >= f.order.length) {
+  // per-hand pointers: each hand (voice staff) has its own ordered sequence;
+  // a played note matches whichever hand's CURRENT chord/note contains it.
+  for (const v of Object.keys(f.voices)) {
+    const st = f.voices[v];
+    if (st.i >= st.events.length) continue;
+    const cur = st.events[st.i];
+    if (!cur.midis.includes(midi)) continue;
+    if (!cur.got.includes(midi)) cur.got.push(midi);
+    if (cur.got.length >= cur.midis.length) {
+      cur.ticked = true;
+      tickLabelByExact(cur.label);
+      st.i++;
+    }
+    const doneEvts = Object.keys(f.voices)
+      .reduce((a2, v2) => a2 + f.voices[v2].events.filter(e3 => e3.ticked).length, 0);
+    const total = Object.keys(f.voices).reduce((a2, v2) => a2 + f.voices[v2].events.length, 0);
+    el("pfinfo").textContent = base + "\u00a0\u00a0\u2713" + doneEvts + "/" + total;
+    if (doneEvts >= total) {
       f.done = true;
       el("pfinfo").textContent = base + "\u00a0\u00a0\u2713 done";
       if (el("pfauto").classList.contains("playing")) {
         setTimeout(() => { if (window.__pfFollowOn) pfMove(1); }, 600);
       }
-      return;
     }
-    el("pfinfo").textContent = base + "\u00a0\u00a0\u2713" + f.i + "/" + f.order.length;
+    return;
   }
+  if (f.tolerated.includes(midi)) return;   // grace notes are never a miss
+  f.misses++;
+  const doneEvts = Object.keys(f.voices)
+    .reduce((a2, v2) => a2 + f.voices[v2].events.filter(e3 => e3.ticked).length, 0);
+  const total = Object.keys(f.voices).reduce((a2, v2) => a2 + f.voices[v2].events.length, 0);
+  el("pfinfo").textContent = base + "\u00a0\u00a0\u2713" + doneEvts + "/" + total +
+    "\u00a0\u00a0!" + f.misses;
 }
 function tickLabelByExact(labelText) {
   for (const t of document.querySelectorAll("#pfbox svg text")) {
