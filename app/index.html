@@ -718,7 +718,7 @@ function followNote(midi) {
       f.done = true;
       el("pfinfo").textContent = base + "\u00a0\u00a0\u2713 done";
       if (el("pfauto").classList.contains("playing")) {
-        setTimeout(() => { if (window.__pfFollowOn) pfMove(1); }, 600);
+        setTimeout(() => { if (window.__pfFollowOn) pfMove(1); }, 220);
       }
     }
     return;
