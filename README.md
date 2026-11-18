@@ -73,6 +73,7 @@ files/            the ABC library (gitignored — content is copyrighted)
 nginx/            nginx config: static server + JSON index for files/
 specs/            written specs for the practice features
 .specify/         spec-kit tooling used for spec work
+docker-compose.example.yml   example container setup
 ```
 
 ### The fitting engine
@@ -135,10 +136,13 @@ file lands in `files/`.
 Everything runs as static files behind a reverse proxy. In my setup Caddy
 terminates TLS and routes the subdomain, an oauth2-proxy sidecar fronts the
 site with SSO (my sheet music isn't public), and an nginx container serves the
-app and the JSON index of `files/`. Two non-obvious deployment requirements:
-serve everything with `Cache-Control: no-store`, because I push code live and
-a cached page will happily show a build from three edits ago; and serve
-`/files/` as JSON autoindex, because the page builds its file list from it.
+app and the JSON index of `files/`. A runnable example with the nginx service
+(and a commented-out SSO sidecar) is in `docker-compose.example.yml`.
+
+Two non-obvious deployment requirements: serve everything with
+`Cache-Control: no-store`, because I push code live and a cached page will
+happily show a build from three edits ago; and serve `/files/` as JSON
+autoindex, because the page builds its file list from it.
 
 ## Development notes
 

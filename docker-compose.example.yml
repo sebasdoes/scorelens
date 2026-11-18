@@ -1,0 +1,42 @@
+# Example docker-compose for Scorelens.
+# Copy this file to docker-compose.yaml (or merge it into your existing
+# compose file) and adjust the paths and domain.
+#
+# Structure expected next to this compose file:
+#   app/    index.html + abcjs-basic-min.js + sf/ soundfont
+#   files/  your ABC library
+#   nginx/  default.conf (see nginx/default.conf in this repo)
+#
+# Scorelens behind SSO: my own setup runs oauth2-proxy as a sidecar and lets
+# Caddy route the domain to it. The commented service below shows that
+# variant — fill in the cookie secret and provider settings first, and
+# remember that proxying to scorelens-web:80 replaces the direct Caddy route.
+
+services:
+  scorelens-web:
+    image: nginx:alpine
+    container_name: scorelens-web
+    restart: unless-stopped
+    read_only: true
+    volumes:
+      - ./app:/srv/app:ro
+      - ./files:/srv/files:ro
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    # no exposed ports in my setup: Caddy and oauth2-proxy reach it over the
+    # internal docker network. Uncomment if you want it directly reachable.
+    # ports:
+    #   - "8080:80"
+    security_opt:
+      - no-new-privileges:true
+
+  # scorelens-oauth2-proxy:
+  #   image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.4
+  #   container_name: scorelens-oauth2-proxy
+  #   restart: unless-stopped
+  #   depends_on:
+  #     - scorelens-web
+  #   volumes:
+  #     - ./oauth2-proxy/scorelens.cfg:/etc/oauth2-proxy.cfg:ro
+  #   command: --config /etc/oauth2-proxy.cfg
+  #   security_opt:
+  #     - no-new-privileges:true
