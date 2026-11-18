@@ -185,6 +185,7 @@ async function loadFile() {
 // {name, count} events (chords as one entry with `count` heads).
 function computeEvents(tune, collector) {
   const out = [];
+  let headIdx = 0;   // global draw order of note heads == DOM order of .abcjs-notehead
   const eventsOut = collector ? collector.order : null;
   // collector (optional): ordered required events for the piano link.
   // midis are octave-strict; grace notes are tolerated, never required.
@@ -229,7 +230,8 @@ function computeEvents(tune, collector) {
               if (gi.name || gi.pitch !== undefined) {
                 const gp = { name: gi.name, pitch: gi.pitch, accidental: gi.accidental };
                 outStaff.push({ name: headName(gp), count: 1 });
-                if (collector) collector.tolerated.push(midiOf(gp));
+                if (collector) collector.tolerated.push({ midi: midiOf(gp), h: headIdx });
+                headIdx++;
               }
             }
           }
@@ -237,7 +239,8 @@ function computeEvents(tune, collector) {
           const label = ev.pitches.map(headName).join("\u2009");
           outStaff.push({ name: label, count: ev.pitches.length });
           if (eventsOut) eventsOut.push({ midis: ev.pitches.map(midiOf), label: label, got: [], ticked: false,
-                                          v: si });
+                                          v: si, hStart: headIdx, hCount: ev.pitches.length });
+          headIdx += ev.pitches.length;
         }
       }
     }
@@ -534,7 +537,8 @@ function pfRender() {
           const vkey = e2.v || "0";
           (voices[vkey] = voices[vkey] || { events: [], i: 0 }).events.push(e2);
         });
-        pfFollow = { voices: voices, tolerated: col.tolerated, misses: 0, done: false };
+        pfFollow = { voices: voices, tolerated: col.tolerated, misses: 0, done: false,
+                     heads: Array.from(document.querySelectorAll("#pfbox svg .abcjs-notehead")) };
         if (window.__pfFollowOn) window.__pfInfoBase = el("pfinfo").textContent;
         // duet: pre-render the opposite voice for the accompanist
         window.__pfAccVis = null;
@@ -666,7 +670,8 @@ function hookMidiInput(inp) {
       const vkey = e2.v || "0";
       (voices2[vkey] = voices2[vkey] || { events: [], i: 0 }).events.push(e2);
     });
-    pfFollow = { voices: voices2, tolerated: col2.tolerated, misses: 0, done: false };
+    pfFollow = { voices: voices2, tolerated: col2.tolerated, misses: 0, done: false,
+                 heads: Array.from(document.querySelectorAll("#pfbox svg .abcjs-notehead")) };
     window.__pfInfoBase = el("pfinfo").textContent;
   }
 }
@@ -681,7 +686,14 @@ function onPianoNote(midi, on) {
 
 function followNote(midi) {
   const f = window.__pfFollowOn ? pfFollow : null;
-  if (!f || f.done) return;
+  if (!f) return;
+  // grace notes fade whenever played, even after the measure is done
+  const grace = f.tolerated.find(t2 => t2.midi === midi);
+  if (grace) {
+    if (f.heads[grace.h]) f.heads[grace.h].style.opacity = 0.25;
+    return;
+  }
+  if (f.done) return;
   const base = window.__pfInfoBase || el("pfinfo").textContent;
   // per-hand pointers: each hand (voice staff) has its own ordered sequence;
   // a played note matches whichever hand's CURRENT chord/note contains it.
@@ -693,7 +705,9 @@ function followNote(midi) {
     if (!cur.got.includes(midi)) cur.got.push(midi);
     if (cur.got.length >= cur.midis.length) {
       cur.ticked = true;
-      tickLabelByExact(cur.label);
+      for (let h2 = cur.hStart; h2 < cur.hStart + cur.hCount; h2++) {
+        if (f.heads[h2]) f.heads[h2].style.opacity = 0.25;
+      }
       st.i++;
     }
     const doneEvts = Object.keys(f.voices)
@@ -709,20 +723,12 @@ function followNote(midi) {
     }
     return;
   }
-  if (f.tolerated.includes(midi)) return;   // grace notes are never a miss
   f.misses++;
   const doneEvts = Object.keys(f.voices)
     .reduce((a2, v2) => a2 + f.voices[v2].events.filter(e3 => e3.ticked).length, 0);
   const total = Object.keys(f.voices).reduce((a2, v2) => a2 + f.voices[v2].events.length, 0);
   el("pfinfo").textContent = base + "\u00a0\u00a0\u2713" + doneEvts + "/" + total +
     "\u00a0\u00a0!" + f.misses;
-}
-function tickLabelByExact(labelText) {
-  for (const t of document.querySelectorAll("#pfbox svg text")) {
-    const s = t.textContent || "";
-    if (s.startsWith("=") || s.includes("\u2713")) continue;
-    if (s === labelText) { t.textContent = s + " \u2713"; return; }
-  }
 }
 let liveSynth = null;
 const SF_URL = "/sf/FluidR3_GM/";
