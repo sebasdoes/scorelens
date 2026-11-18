@@ -1,224 +1,173 @@
 # Scorelens
 
-A self-hosted web viewer for ABC sheet music. I built it because I read music
-slowly and I wanted a faster way to study piano pieces on a tablet.
+Scorelens is a self-hosted web app for reading ABC sheet music. I built it
+because I read music slowly: I have achromatopsia, standard sheet music on a
+tablet is small, and parsing dense notation takes me much longer than it takes
+others. So instead of fighting with printed pages, I have a machine-readable
+version of the piece, rendered exactly the way I need it — one measure at a
+time, filling the screen, with the note names written under the notes.
 
-The project lives in one page. It shows a score big, puts a letter with the
-note name under every note head, plays the music, and can follow you while you
-play a real piano.
-
-## Why I started this project
-
-I have achromatopsia. I see fine detail poorly, and color is no help to me.
-Standard sheet music on a tablet is small. I can read it, but not quickly.
-
-So I gave myself a short list of needs:
-
-- Show one measure at a time. Fill the screen with it.
-- Put the note name under each note head. This turns each measure into text
-  that I can read fast.
-- Play the measure, so I can compare what I hear with what I see.
-- Work on my tablet in the browser. No app store. No install.
-
-The first score I used for this was a piano arrangement of Hitchcock by
-Yorushika. I transcribed it to ABC by hand and machine, with a second opinion
-from an open-source OMR tool. Two more pieces followed. Now I add a PDF, I get
-an ABC file, and I practice.
+The project started with a piano arrangement of Yorushika's Hitchcock that I
+transcribed in ABC. Two more arrangements and a lot of UI iteration later, the
+app has grown into a complete practice tool: it plays the music, it can listen
+to my digital piano while I play along, and it keeps up with me while I read.
 
 ## Features
 
-Main page:
+The main page lists the ABC files in a mounted folder and renders the selected
+score, scaled to fill the screen width on any device. A toggle puts the note
+name under every note head — the letter and the accidental, so an F♯ shows up
+as "F♯" — which turns each measure into something I can read almost like
+text.
 
-- Lists the `.abc` files in a mounted folder. The loaded file gets a tick mark
-  in the list.
-- Draws the full score. It fills the screen width on any device.
-- "Note names" toggle. This is the ♪A switch. It stamps the letter and the
-  accidental below each note head.
-- A zoom control for the whole score.
-- Play. The browser synthesizes the piano sound. No MP3 files. No external
-  CDN. The soundfont sits next to the page.
-- Three themes: White, Dark, and High contrast (pure black with white notes).
-  The choice persists.
+Practice mode is the core of it. The screen shows one, two, or three measures
+at a time (a small slider picks the count), filled edge to edge, with tap
+navigation on the left and right. A voice toggle switches between RH, LH, and
+a properly aligned two-staff grand staff view.
 
-Practice mode:
+Every piece can be played back. The browser synthesizes the piano from the ABC
+data — no MP3 files, no external soundfont CDN, the sound samples are served
+from the app itself. In practice mode, playback follows the window: as soon as
+you move to the next measure, the audio moves with you.
 
-- Full screen. One, two, or three measures per window. You pick with the
-  "Bars" slider.
-- The measure fills the screen. Notes cannot fall off the edge, in landscape
-  or portrait.
-- Tap left to go back, tap right to go forward. Drag to pan.
-- Voice toggle: RH, LH, or BOTH. RH and LH show one staff. BOTH shows one
-  aligned grand staff.
-- The info line shows the song title and your position.
+Three themes are built in — White, Dark, and a High Contrast mode that is
+pure black with white notes — and the choice persists between visits. For
+extra accessibility, everything on the score that conveys information (hit
+marks, feedback, the current position) is text and ticks. I deliberately never
+encode meaning in color, because color doesn't work for me at all.
 
-Piano link (Web MIDI):
+## The piano link
 
-- Connect a class-compliant digital piano to the tablet with an OTG cable.
-  I use a Yamaha P-105.
-- With the piano connected, the play button becomes an accompanist. It plays
-  the staff you are not reading, while you play the other one on the real
-  piano.
-- Auto-advance: the practice window waits for you and turns the page when you
-  have played its pitch classes. Octave errors do not count against you.
-- Scoring: a tick appears at each note name you played, the info line counts
-  hits and misses. All feedback is text and ticks. I do not use color for
-  information, because I cannot use color.
+The most fun part: Scorelens talks to my Yamaha P-105 digital piano over Web
+MIDI. The piano plugs into the tablet with a cheap OTG cable, Chrome asks for
+permission once, and from then on the page and the instrument are connected.
 
-## The ABC file format
+Three things happen when the piano is connected:
 
-Scorelens needs each bar on its own lines. A file looks like this:
+- **Duet mode.** The play button stops playing the staff I'm reading and
+  instead plays the *other* one. If I'm reading the right hand, Scorelens
+  plays the left hand along with me — a patient accompanist that never gets
+  tired of waiting.
+- **Auto-advance.** Practice mode stops flipping pages on tap and instead
+  waits for me to play. When I've played enough of the right pitch classes in
+  the current window (octave doesn't matter, so I can transpose if my hands
+  prefer it), the page turns by itself.
+- **Scoring.** Each note name in the measure gets a tick mark as I play its
+  letter, and the info line counts hits and, when I rush, misses. The
+  feedback is deliberately plain text and ticks rather than colored
+  highlights — anything that depends on me telling colors apart is a dead
+  end.
 
-```
-X:1
-T:Time Flows Ever Onward
-M:3/4
-L:1/8
-Q:1/4=114
-K:C
-%%score { 1 | 2 }
-V:1 treble
-V:2 bass
-% bar 1
-[V:1] C3 B, A,2|
-[V:2] [A,,E,A,]6|
-% bar 2
-[V:1] ^G,6|
-[V:2] [E,,B,,E,]6|
-```
+It only works over Chrome right now; Firefox on Android still ships Web MIDI
+unreliably, and the app leans on it heavily.
 
-Rules that matter:
+## How it works
 
-- Every bar starts with a `% bar N` comment. Practice mode splits the file on
-  these comments. Without them, practice mode does not page.
-- Blank lines end a tune for the ABC parser, silently. Keep the body
-  continuous.
-- Music lines carry the `[V:1]` or `[V:2]` voice tag.
-- Key changes go inline as `[K:G]` lines between bars.
-
-## Architecture
-
-The whole app is one HTML file with the vendored abcjs library next to it.
-I keep it that way on purpose. One file, no build step, no framework, no
-package manager. I deploy by copying the file.
-
-Layout of this folder:
+The entire app is one HTML file plus a vendored copy of the abcjs library. No
+build step, no package manager, no framework. Deploying is copying files into
+a folder.
 
 ```
-app/
-  index.html            the app
-  abcjs-basic-min.js    abcjs 6.7.2, vendored
-  sf/                   FluidR3 grand piano soundfont, served locally
-files/                  the ABC library (ignored by git; content is personal)
-nginx/                  nginx config for the static server and /files/ JSON
-specs/                  written specifications for the practice features
-.specify/               spec-kit tooling used for spec work
+app/              the app HTML, the vendored abcjs, and a local soundfont
+files/            the ABC library (gitignored — content is copyrighted)
+nginx/            nginx config: static server + JSON index for files/
+specs/            written specs for the practice features
+.specify/         spec-kit tooling used for spec work
 ```
 
 ### The fitting engine
 
-abcjs computes layout sizes in ways that shift between browsers and scales.
-Fights with that model broke three builds. The current engine does not fight
-it:
+abcjs computes layout in ways that shift between browsers and between zoom
+levels, and fighting that model directly broke the layout three separate
+times. The fitting engine sidesteps it entirely:
 
 1. Render at scale 1 into a large internal canvas.
 2. Stamp the note-name labels inside the same SVG.
-3. Read the ink bounding box with `getBBox()`.
-4. Set that box as the SVG `viewBox`, and let `preserveAspectRatio` scale it
-   into a flex box that fills the screen.
+3. Read the ink's bounding box with `getBBox()`.
+4. Set that box as the SVG's `viewBox` and let `preserveAspectRatio="meet"`
+   scale it into a flex container that fills the screen.
 
-`preserveAspectRatio` with "meet" always contains the drawing. Nothing can
-clip, in any orientation. The notes fill the width on any screen. This one
-pattern fixed every size bug I had: mobile clipping, wrong widths, and the
-scale-versus-staffwidth confusion.
+`preserveAspectRatio="meet"` contains the drawing by construction, so nothing
+can fall off the edge — in landscape, in portrait, or when the browser sizes
+things invasively. The notes fill the available width on every screen,
+because that is the axis the viewBox gives them.
 
-### Practice mode
+### Practice mode and fragments
 
-A slice of the ABC file becomes a small fragment. The builder derives the
-header (meter, unit length, tempo, key) from the file, so a 12/8 piece and a
-4/4 piece both work. It joins all bars of the window into one music line,
-because abcjs starts a new system for each source line. A key change inside
-the window breaks the line, because a key change must sit at the start of a
-line.
+Practice mode slices the ABC file into windows through `% bar N` comments —
+every bar in the file carries one, which is a hard requirement for anything
+that goes into my library. The fragment builder derives the musical header
+(meter, unit length, tempo, key) from the actual file, so a 12/8 piece and a
+4/4 piece both work without hardcoding. All bars inside a window join onto a
+single music line — because abcjs interprets each new source line as a new
+system, which produced stacked one-bar systems before I learned why — and a
+mid-window key change is allowed to break the line where it belongs.
 
-Note names are not parsed from the music text. They come from the parse
-result of abcjs, with three rules: an explicit accidental wins, then the last
-accidental on that letter in the bar, then the key signature. The label lane
-sits under the staff, inside the SVG box, so mobile browsers do not clip it.
+Note names do not come from the ABC text but from abcjs's parse result, using
+the same order the renderer uses visually. An explicit accidental wins, then
+the last accidental on that letter in the bar, then the key signature. The
+labels live inside the SVG's own box, which keeps them from being clipped —
+something mobile browsers do aggressively where desktop browsers happily
+overflow.
 
-### Playback and the piano link
+### Playback and the piano
 
-abcjs also synthesizes. The page renders fragments and hands them to
-`CreateSynth` with a locally served grand piano soundfont. The browser loads
-only the notes it needs.
+abcjs synthesizes from parse data, so the page hands fragments directly to
+`CreateSynth` with a locally served grand piano. When a MIDI input is
+connected, the app listens on it, tracks pitch classes, and — in duet mode —
+synthesizes the opposite staff from a hidden render of the same fragment, so
+the accompaniment is always exactly the music on screen.
 
-When a MIDI device is connected, three things turn on:
+### The transcription pipeline
 
-- Duet. The play button plays the opposite staff from the one you read.
-- Follow. The app listens on the MIDI input and matches pitch classes. This
-  ignores octaves, so the same letter in another octave still counts.
-- Auto-advance. After you play every pitch class of the window, the page
-  turns.
-
-Note requirements come from the same parse result, so the piano link and the
-display always agree.
-
-### Transcription pipeline
-
-A printed PDF is not the input to the app. Someone (me, or an agent I task
-with) converts it first:
-
-1. If the PDF is vector, extract the music glyphs with their positions. Map
-   the engraver font. Sibelius and MuseScore exports both work this way.
-2. If the PDF is a scan, decode note heads from pixels. This is slower.
-3. Get a second opinion from Audiveris in Docker. Compare note events
-   per bar. Trust neither source; cross-check.
-4. Validate with `abc2midi`, then add the `% bar N` comments and place the
-   file in `files/`.
-
-The accuracy check stays with the human. These files are arrangements with
-rights, so I keep them out of the repository.
+The score comes from somewhere other than the app. PDFs arrive as either
+vector exports (from Sibelius, MuseScore, and similar engravers) or scanned
+images. Vector PDFs are decoded through the engraver's own font glyph table,
+which is far more accurate than pixels. Scans go through a pixel-level
+notehead pipeline. Either way, the result gets a second opinion from
+Audiveris running in Docker — I compare note events per bar between the two
+transcriptions and treat disagreements as flags to verify by hand. Then
+`abc2midi` validates the rhythm end to end, the bar comments go in, and the
+file lands in `files/`.
 
 ## Deployment
 
-The stack is static files behind a reverse proxy. My deployment has three
-parts: Caddy terminates TLS and gives one site per subdomain. An
-oauth2-proxy sidecar fronts the site with SSO. An nginx container serves the
-app and the JSON file index.
-
-Requirements for a clean deployment:
-
-- Serve everything with `Cache-Control: no-store`. I edit code live, and a
-  cached page shows an old build.
-- Serve `/files/` as JSON autoindex. The page filters and sorts.
-- Put the soundfont in `app/sf/`, because `CreateSynth` loads notes from it
-  at play time.
+Everything runs as static files behind a reverse proxy. In my setup Caddy
+terminates TLS and routes the subdomain, an oauth2-proxy sidecar fronts the
+site with SSO (my sheet music isn't public), and an nginx container serves the
+app and the JSON index of `files/`. Two non-obvious deployment requirements:
+serve everything with `Cache-Control: no-store`, because I push code live and
+a cached page will happily show a build from three edits ago; and serve
+`/files/` as JSON autoindex, because the page builds its file list from it.
 
 ## Development notes
 
-I test with headless Chromium and Firefox through Playwright, at the real
-viewport of my tablet, not only at desktop size. Mobile browsers clip SVG
-content that desktop browsers overflow, so a desktop-only check proves
-nothing. A build marker in the UI tells me which build the browser shows.
+I test with headless Chromium and Firefox through Playwright at the real
+viewport of my tablet — not only at desktop size, because mobile browsers
+clip SVG content that desktop browsers overflow, and a desktop-only green
+check proves nothing. A small build marker in the UI tells me which build the
+browser is actually running, which has settled more than one argument about
+stale caches.
 
-Specifications for the practice features are in `specs/`. They record the
-decisions I argued with myself about: window paging, the fitting engine, the
-fragment builder, and the size model.
+The specifications in `specs/` record the design decisions and the reasoning
+behind them: window paging, the fitting engine, the fragment builder, and the
+size model.
 
 ## Status and roadmap
 
-Working: score viewing, note names, practice paging with 1 to 3 measures,
-per-measure playback, whole-score playback, themes, drag panning, piano link
+Working: score viewing, note names, 1-to-3 measure practice paging, synced
+per-measure playback, whole-score playback, drag panning, themes, piano link
 with duet, auto-advance, and scoring.
 
-Wanted:
+Still on the list:
 
-- Zoom polish inside practice mode.
-- A tempo-controlled follow mode, with expected-note tracking in time.
+- Polishing zoom inside practice mode.
+- A tempo-following mode with time-aligned expected-note tracking.
 - Bluetooth MIDI as a second transport.
 
 ## Copyright
 
-The code in this repository is mine, and I share it under the MIT license.
-The ABC files in `files/` are arrangements of copyrighted music. They stay
-out of git, in the mounted folder only. The soundfont in `app/sf/` comes from
-the FluidR3_GM set distributed in paulrosen/midi-js-soundfonts.
+The code is mine and MIT licensed. The ABC files in `files/` are generally
+arrangements of copyrighted popular music, so they live in the mounted folder
+on my server and stay out of git. The soundfont in `app/sf/` comes from the
+FluidR3_GM set distributed by paulrosen/midi-js-soundfonts.
